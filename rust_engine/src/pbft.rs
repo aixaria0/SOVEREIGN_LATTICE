@@ -31,7 +31,8 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
-    view_change_votes: HashMap<u64, HashSet<u32>>, // target_view -> Set of supporting nodes
+    // Target View -> Sender ID -> (Latest Prepared Seq, Digest)
+    view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32])>>, 
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
     public_keys: HashMap<u32, G2Projective>,
@@ -53,14 +54,22 @@ impl PbftState {
             }
         }
 
-        let wal = WriteAheadLog::open("consensus_wal.log")
+        let mut wal = WriteAheadLog::open("consensus_wal.log")
             .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
+
+        // State Recovery Mechanism from WAL
+        let mut recovered_view = 0;
+        let mut recovered_seq = 0;
+        let _ = wal.replay_log(|view, seq, _phase, _digest| {
+            if view > recovered_view { recovered_view = view; }
+            if seq > recovered_seq { recovered_seq = seq; }
+        });
 
         Ok(Self {
             total_nodes,
             f,
-            current_view: 0,
-            highest_seq: 0,
+            current_view: recovered_view,
+            highest_seq: recovered_seq,
             prepared_digest: HashMap::new(),
             committed_digest: HashMap::new(),
             pre_prepared_proposals: HashSet::new(),
@@ -92,7 +101,7 @@ impl PbftState {
         canonical_msg.extend_from_slice(&msg.seq.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.digest);
 
-        // 1. Cryptographic Authentication First
+        // 1. Cryptographic Authentication
         if !verify_bls_signature(&canonical_msg, &msg.signature, pk) {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
@@ -165,18 +174,36 @@ impl PbftState {
                 }
 
                 let supporters = self.view_change_votes.entry(msg.view).or_default();
-                supporters.insert(msg.sender_id);
+                // Store the piggybacked prepared certificate (sequence and digest)
+                supporters.insert(msg.sender_id, (msg.seq, msg.digest));
 
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
-                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached. Successfully advanced to View {}.", msg.view)
+                    
+                    // NewView Semantics: Extract highest prepared state from the quorum
+                    let mut max_seq = 0;
+                    let mut best_digest = [0u8; 32];
+                    
+                    for &(seq, digest) in supporters.values() {
+                        if seq > max_seq {
+                            max_seq = seq;
+                            best_digest = digest;
+                        }
+                    }
+                    
+                    if max_seq > 0 {
+                        self.highest_seq = self.highest_seq.max(max_seq);
+                        self.prepared_digest.insert((msg.view, max_seq), best_digest);
+                    }
+
+                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached. Advanced to View {}. Inherited valid Seq: {}", msg.view, max_seq)
                 } else {
                     format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
             }
         };
 
-        // 3. Durable WAL Append ONLY after successful logical and cryptographic verification
+        // 3. Durable WAL Append ONLY after validation
         self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, &msg.digest)
             .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
 
