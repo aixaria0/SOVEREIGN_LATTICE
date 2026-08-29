@@ -461,7 +461,6 @@ impl PbftState {
 mod adversarial_tests {
     use super::*;
     use bls12_381::{G1Projective, G2Projective, Scalar};
-    use group::Group;
     use rand::rngs::OsRng;
     use ff::Field;
 
@@ -488,8 +487,9 @@ mod adversarial_tests {
         
         let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
         
-        let target_view = 1;
-        let malicious_seq = 999; // Ghost sequence
+        // Fix: Explicitly define types as u64 to prevent compiler ambiguity
+        let target_view: u64 = 1;
+        let malicious_seq: u64 = 999; // Ghost sequence
         let malicious_digest = [0xbb; 32];
 
         let mut create_view_change = |sender_id: u32, sk: &Scalar| {
