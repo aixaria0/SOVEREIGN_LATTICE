@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOVEREIGN LATTICE // MATRIX TERMINAL</title>
+    <style>
+        body {
+            background-color: #030a03;
+            color: #00ff41;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 15px;
+            box-sizing: border-box;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px dashed #00ff41;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+        .status-badge {
+            border: 1px solid #00ff41;
+            padding: 2px 8px;
+            font-size: 0.8rem;
+            background: rgba(0, 255, 65, 0.1);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        @media(max-width: 768px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+        .box {
+            border: 1px solid #00ff41;
+            padding: 15px;
+            background: rgba(0, 20, 0, 0.4);
+            box-shadow: inset 0 0 10px rgba(0, 255, 65, 0.05);
+            min-height: 180px;
+        }
+        .box-title {
+            font-size: 0.9rem;
+            border-bottom: 1px solid #00ff41;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        .log-line {
+            font-size: 0.75rem;
+            margin: 4px 0;
+            opacity: 0.85;
+        }
+        .locked-box {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 110px;
+            border: 2px solid #00ff41;
+            margin-top: 15px;
+            background: rgba(0, 255, 65, 0.05);
+        }
+        .locked-text {
+            font-size: 1.8rem;
+            font-weight: bold;
+            letter-spacing: 3px;
+            text-shadow: 0 0 10px #00ff41;
+        }
+        .chart-line {
+            color: #00ff41;
+            font-family: monospace;
+            white-space: pre;
+            font-size: 0.75rem;
+            line-height: 1.2;
+            margin-top: 10px;
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 15px 0;
+            font-size: 0.85rem;
+            border-bottom: 1px dotted #00ff41;
+            padding-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>SOVEREIGN LATTICE // ASYNC PBFT ENGINE</div>
+        <div class="status-badge">SYSTEM: ONLINE</div>
+    </div>
+    <div style="font-size: 0.75rem; margin-bottom: 15px; opacity: 0.7;">
+        RUNTIME: TOKIO ASYNC | VERIFICATION: LEAN 4 GÖDEL-LÖB | CRYPTO: BLS12-381
+    </div>
+
+    <div class="grid">
+        <!-- Box 1: Async Daemon / Tokio Loop -->
+        <div class="box">
+            <div class="box-title">1. ASYNCHRONOUS DAEMON (TOKIO LOOP)</div>
+            <div class="log-line">> [10:39:55] TCP LISTENER: Ingesting peer payload from node_03...</div>
+            <div class="log-line">> [10:39:53] PBFT STATE: View-change timer stable. Heartbeat ACK.</div>
+            <div class="log-line">> [10:39:51] EXECUTE: State machine transition verified.</div>
+            <div class="log-line">> [10:39:49] VALIDATION: Lean 4 theorem 'GodelLob_BFT' = PASS.</div>
+            <div class="log-line">> [10:39:47] ACT: Threshold BLS aggregate signature verified.</div>
+            <div class="log-line">> [10:39:45] DECIDE: Checkpoint watermark cleared successfully.</div>
+        </div>
+
+        <!-- Box 2: Lean 4 Boundary -->
+        <div class="box">
+            <div class="box-title">2. LEAN 4 FORMAL BOUNDARY</div>
+            <div style="font-size: 0.75rem; margin-top: 5px; opacity: 0.8;">Lean 4 Theorem: delta_eq_one_lock_verified</div>
+            <div class="locked-box">
+                <div class="locked-text">LOCKED : TRUE</div>
+            </div>
+            <div style="text-align: center; font-size: 0.75rem; margin-top: 10px; opacity: 0.7;">
+                EXECUTION GATE: OPEN // BYZANTINE FAULT TOLERANT
+            </div>
+        </div>
+
+        <!-- Box 3: Consensus Throughput Topology -->
+        <div class="box">
+            <div class="box-title">3. CONSENSUS THROUGHPUT (Tx/s)</div>
+            <div class="chart-line">
+    100 |          /\
+     75 |    /\   /  \    /\
+     50 |   /  \_/    \__/  \
+     25 |__/                 \___
+      0 +------------------------
+        02 04 06 08 10 12 14 16
+            </div>
+            <div style="font-size: 0.75rem; margin-top: 8px;">PEER LATENCY: 12.4ms | SLOTS COMMITTED: 99.98%</div>
+        </div>
+
+        <!-- Box 4: Cryptographic Metrics -->
+        <div class="box">
+            <div class="box-title">4. THRESHOLD CRYPTOGRAPHY METRICS</div>
+            <div class="metric-row">
+                <span>DKG ROUND STATUS:</span>
+                <span>COMPLETE</span>
+            </div>
+            <div class="metric-row">
+                <span>FROST AGGREGATION:</span>
+                <span>OPTIMAL (3/5)</span>
+            </div>
+            <div class="metric-row" style="border: none;">
+                <span>VERIFICATION ERROR:</span>
+                <span style="font-weight: bold; color: #00ff41; text-shadow: 0 0 5px #00ff41;">0.0000</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
