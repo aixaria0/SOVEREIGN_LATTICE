@@ -31,7 +31,7 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
-    view_change_votes: HashMap<(u64, u32), HashSet<u32>>,
+    view_change_votes: HashMap<u64, HashSet<u32>>, // target_view -> Set of supporting nodes
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
     public_keys: HashMap<u32, G2Projective>,
@@ -92,14 +92,13 @@ impl PbftState {
         canonical_msg.extend_from_slice(&msg.seq.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.digest);
 
+        // 1. Cryptographic Authentication First
         if !verify_bls_signature(&canonical_msg, &msg.signature, pk) {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
 
-        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, &msg.digest)
-            .map_err(|_| "WAL_ERROR: Failed to write consensus event to disk log!")?;
-
-        match msg.phase {
+        // 2. Logical State Transitions & Validation
+        let response = match msg.phase {
             Phase::PrePrepare => {
                 if msg.view != self.current_view {
                     return Err("VIEW_MISMATCH: PrePrepare view does not match current consensus view!");
@@ -117,7 +116,7 @@ impl PbftState {
 
                 self.pre_prepared_proposals.insert(proposal_key);
                 self.highest_seq = self.highest_seq.max(msg.seq);
-                Ok(format!("📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}", msg.sender_id, msg.view, msg.seq))
+                format!("📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}", msg.sender_id, msg.view, msg.seq)
             }
 
             Phase::Prepare => {
@@ -132,9 +131,9 @@ impl PbftState {
 
                 if votes.len() >= self.quorum_size {
                     self.prepared_digest.insert((msg.view, msg.seq), msg.digest);
-                    Ok(format!("✅ [PREPARED]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq))
+                    format!("✅ [PREPARED]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq)
                 } else {
-                    Ok(format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, votes.len(), self.quorum_size))
+                    format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, votes.len(), self.quorum_size)
                 }
             }
 
@@ -154,9 +153,9 @@ impl PbftState {
 
                 if votes.len() >= self.quorum_size {
                     self.committed_digest.insert((msg.view, msg.seq), msg.digest);
-                    Ok(format!("🏆 [COMMITTED]: Sequence {} definitively committed under View {}.", msg.seq, msg.view))
+                    format!("🏆 [COMMITTED]: Sequence {} definitively committed under View {}.", msg.seq, msg.view)
                 } else {
-                    Ok(format!("⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, votes.len(), self.quorum_size))
+                    format!("⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, votes.len(), self.quorum_size)
                 }
             }
 
@@ -165,11 +164,22 @@ impl PbftState {
                     return Err("VIEW_CHANGE_INVALID: Target view must be greater than current view!");
                 }
 
-                let votes = self.view_change_votes.entry((msg.view, msg.sender_id)).or_default();
-                votes.insert(msg.sender_id);
+                let supporters = self.view_change_votes.entry(msg.view).or_default();
+                supporters.insert(msg.sender_id);
 
-                Ok(format!("🔄 [VIEW CHANGE]: Vote recorded for transitioning to View {}.", msg.view))
+                if supporters.len() >= self.quorum_size {
+                    self.current_view = msg.view;
+                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached. Successfully advanced to View {}.", msg.view)
+                } else {
+                    format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
+                }
             }
-        }
+        };
+
+        // 3. Durable WAL Append ONLY after successful logical and cryptographic verification
+        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, &msg.digest)
+            .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
+
+        Ok(response)
     }
 }
