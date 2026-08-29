@@ -202,12 +202,45 @@ theorem cross_view_inheritance
   (h_nc_view : nc.target_view = v2) 
   (h_honest_network : ∀ n, n ∉ Byzantine → (network_state n).isSome)
   (h_reporting_rule : ∀ vote ∈ nc.votes, HonestViewChangeReporting Byzantine network_state v1 v2 seq dig vote) :
-  -- The NewView protocol mathematically forces the selection of a sequence >= committed seq
   ∃ (max_seq : ℕ) (best_digest : ℕ), HighestQuorumClaim nc.votes max_seq best_digest ∧ max_seq ≥ seq := by
   
-  -- The detailed tactical proof connecting the quorum intersection to the max_seq selection 
-  -- will be mapped here. For now, the theorem structural layout perfectly aligns 
-  -- with our Rust node semantics.
-  sorry
+  -- 1. Unpack the previously committed quorum
+  rcases h_committed with ⟨Q₁, hQ₁, hC₁⟩
+  
+  -- 2. Unpack the NewView certificate (Strict No-Fallback Rule applies here)
+  rcases h_valid_nv with ⟨hQ₂, max_seq, best_digest, hHighest, _⟩
+  
+  -- 3. Extract the honest node from the intersection (Commit Quorum ∩ ViewChange Quorum)
+  have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection f hN Byzantine hByz Q₁ (nc.votes.image (fun v => v.sender)) hQ₁ hQ₂
+  have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_honest_network n hn_not_byz⟩
+  
+  -- 4. Confirm the honest node's presence in both sets
+  have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
+  have hn_in_Q2 : n ∈ nc.votes.image (fun v => v.sender) := Finset.mem_inter.mp hn_int |>.right
+  
+  -- 5. Extract the specific vote of this honest node from the ViewChange quorum
+  rcases Finset.mem_image.mp hn_in_Q2 with ⟨vote, hvote_in, hvote_sender⟩
+  
+  -- 6. Prove that this node had previously committed the exact digest
+  have hn_commits : NodeCommitted network_state n v1 seq dig := hC₁ n hn_in_Q1 hn_honest
+  
+  -- Rewrite variables to correctly match the sender's vote structure
+  have hvote_honest : IsHonest Byzantine network_state vote.sender := by
+    rw [hvote_sender]
+    exact hn_honest
+    
+  have hvote_commits : NodeCommitted network_state vote.sender v1 seq dig := by
+    rw [hvote_sender]
+    exact hn_commits
+    
+  -- 7. Apply the honest reporting rule: The node's vote MUST be >= the committed state
+  have h_vote_ge_seq := h_reporting_rule vote hvote_in hvote_honest hvote_commits h_v2_greater
+  
+  -- 8. By the HighestQuorumClaim definition, max_seq is strictly >= this specific node's vote
+  have h_max_ge_vote := hHighest.left vote hvote_in
+  
+  -- 9. Final resolution with Omega: If max_seq >= vote.seq AND vote.seq >= seq, then max_seq >= seq
+  use max_seq, best_digest
+  exact ⟨hHighest, by omega⟩
 
 end GodelLobBFT
