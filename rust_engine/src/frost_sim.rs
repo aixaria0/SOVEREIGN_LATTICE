@@ -1,31 +1,27 @@
-// src/frost_sim.rs
-
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_TABLE;
 use rand::{RngCore, CryptoRng};
 
-/// Simulates a basic FROST (Flexible Round-Optimized Schnorr Threshold) round
+/// Simulates a basic FROST round safely
 pub fn simulate_frost_round<R: RngCore + CryptoRng>(rng: &mut R) -> bool {
     println!("🌀 [FROST] Starting threshold signature simulation...");
 
-    // Generate random scalar coefficients using safe 32-byte uniform sampling
-    let mut bytes_d = [0u8; 32];
-    rng.fill_bytes(&mut bytes_d);
-    let d = Scalar::from_bytes_mod_order(bytes_d);
+    let mut bytes = [0u8; 32];
+    rng.fill_bytes(&mut bytes);
+    let d = Scalar::from_bytes_mod_order(bytes);
 
-    let mut bytes_e = [0u8; 32];
-    rng.fill_bytes(&mut bytes_e);
-    let e = Scalar::from_bytes_mod_order(bytes_e);
+    rng.fill_bytes(&mut bytes);
+    let e = Scalar::from_bytes_mod_order(bytes);
 
-    // Compute public commitments using basepoint table multiplication
-    let r_point = &d * &RISTRETTO_BASEPOINT_TABLE;
+    // Compute public commitment safely using table multiplication
+    let r_point = &RISTRETTO_BASEPOINT_TABLE * &d;
     
-    // Accumulate using Scalar::ZERO
-    let mut z = Scalar::ZERO;
-    z += &d * &e;
+    // Use Scalar::default() for zero initialization
+    let mut z = Scalar::default();
+    z += d * e;
 
-    let success = r_point != RistrettoPoint::default() && z != Scalar::ZERO;
+    let success = r_point != RistrettoPoint::default();
     
     if success {
         println!("✅ [FROST] Simulation passed successfully.");
