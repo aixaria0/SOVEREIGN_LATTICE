@@ -9,16 +9,29 @@
 
 ---
 
-## Core Architecture
+# SOVEREIGN LATTICE: The Blueprint of Infallible Consensus
 
-**Sovereign Lattice** is a high-assurance, production-grade Byzantine Fault Tolerant (PBFT) consensus engine written in **Rust**, with its core safety invariants formally verified and machine-checked in **Lean 4**. 
+## 1. Abstract
+Current Byzantine Fault Tolerant (BFT) systems rely on heuristic safety assumptions and probabilistic finality. **Sovereign Lattice** introduces a paradigm shift: a mathematically verified consensus framework bound by Gödel-Löb provability logic, executed in a high-performance Rust environment.
 
-Developed under the **AixAria** research initiative, this framework eliminates protocol ambiguity, delivering absolute mathematical immunity against network partitions, equivocation, and adversarial leader failures.
+## 2. Dual-Layer Architecture
+The system is strictly divided into two operational planes to isolate logical constraints from asynchronous network execution:
 
-### Key Invariants
-- **Strict No-Fallback Semantics:** Purges ambiguous quorum fallbacks during view changes. Any invalid `NewView` certificate triggers an immediate `MISSING_QUORUM_CERTIFICATE` rejection.
-- **Dual-Path Alignment:** Live execution paths and Write-Ahead Log (WAL) crash recovery share identical state-machine invariants, preventing state drift.
-- **Zero-Axiom Lean Verification:** The multi-view safety core is formally verified in Lean 4 with **zero axioms and zero `sorry` placeholders**, guaranteeing permanent historical immutability.
+*   **The Provability Plane (Lean 4):** Acts as the absolute Genesis Block. It verifies the $\delta = 1$ state and ensures that network consistency is not just achieved, but logically infallible. It formally discharges BFT safety obligations, such as proving that a `Commit` strictly implies a valid `Prepare` phase.
+*   **The Execution Plane (Rust):** An asynchronous, event-driven state machine handling real-time replication, garbage collection, and node timeout management without compromising the proved constraints.
+
+## 3. Cryptographic Foundation
+Sovereign Lattice leverages state-of-the-art threshold cryptography to ensure scalability and Byzantine resistance:
+*   **Distributed Key Generation (DKG):** Feldman VSS integrated with Non-Interactive Zero-Knowledge (NIZK) Schnorr proofs for publicly verifiable share distribution.
+*   **Signature Aggregation:** Threshold BLS over the BLS12-381 curve ensures constant-time verification and minimal bandwidth overhead, regardless of the validator count.
+*   **FROST Integration:** A highly optimized two-round threshold Schnorr signing protocol for low-latency state confirmation.
+
+---
+
+## Core Invariants & Strict Semantics
+*   **Strict No-Fallback Semantics:** Purges ambiguous quorum fallbacks during view changes. Any invalid `NewView` certificate triggers an immediate `MISSING_QUORUM_CERTIFICATE` rejection.
+*   **Dual-Path Alignment:** Live execution paths and Write-Ahead Log (WAL) crash recovery share identical state-machine invariants, preventing state drift.
+*   **Zero-Axiom Lean Verification:** The multi-view safety core is formally verified in Lean 4 with **zero axioms and zero `sorry` placeholders**, guaranteeing permanent historical immutability.
 
 ---
 
@@ -27,30 +40,27 @@ Developed under the **AixAria** research initiative, this framework eliminates p
 - `src/pbft.rs` — Core consensus engine, strict NewView verification, and state machine logic.
 - `lean/GodelLobBFT.lean` — Formal verification proofs of Quorum Intersection, Single-View Safety, and Multi-View Equivocation Prevention.
 - `tests/byzantine_cluster.rs` — Adversarial integration test suite validating fault injection and strict error handling.
+- `docs/whitepaper.md` — Full academic whitepaper and architectural specification.
 
 ---
 
-## Formal Verification Guarantees (Lean 4)
+## Formal Verification Layer (Mathematical Invariants)
 
-Our formal specification models honest local memory traces (`Option` semantics) and proves the following foundational theorems:
+Our formal specification models honest local memory traces (`Option` semantics) and machine-checks absolute safety theorems with zero axioms and zero `sorry` placeholders in **Lean 4**:
 
 - **Quorum Intersection (`quorum_intersection_size`):** In a network of $N = 3f + 1$, any two quorums of size $\ge 2f + 1$ intersect at least in $f + 1$ nodes.
 - **Single-View Safety (`PBFT_Safety`):** Conflicting digests can never be committed within the same view.
 - **Cross-View Inheritance (`cross_view_inheritance`):** View changes strictly inherit prior commitments via honest quorum overlaps.
 - **Multi-View Safety (`Multi_View_Safety`):** Global historical immutability is preserved across arbitrary leader changes and view transitions.
 
----
-
-## Testing & Verification
-
-### Running Rust Byzantine Integration Tests
-Execute the adversarial test suite to validate fault isolation and strict error checking:
+**Check Formal Proofs (Lean 4 Engine):**
 ```bash
-cargo test --test byzantine_cluster
-
-Checking Formal Proofs in Lean 4
-Verify the formal model using Lean 4 and Mathlib:
 lake build
+
+Operational Testing & Execution (Rust Runtime)
+Running Byzantine Integration Tests
+Execute the adversarial test suite via Cargo to validate runtime fault isolation, strict error checking, and no-fallback enforcement:
+cargo test --test byzantine_cluster
 
 Author & Lab
  * Principal Architect: Aria Fani
