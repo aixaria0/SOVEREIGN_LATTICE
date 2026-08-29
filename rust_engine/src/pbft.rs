@@ -21,7 +21,7 @@ pub struct PbftMessage {
     pub signature: G1Projective,
 }
 
-/// Fully Cryptographically Portable Quorum Certificate with real signatures
+/// Fully Cryptographically Portable Prepared Certificate with real signatures
 #[derive(Clone)]
 pub struct PreparedCertificate {
     pub view: u64,
@@ -31,8 +31,6 @@ pub struct PreparedCertificate {
 }
 
 impl PreparedCertificate {
-    /// Cryptographically verifies that the certificate contains at least `quorum_size` 
-    /// valid distinct signatures from the node registry.
     pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
         if self.signatures.len() < quorum_size {
             return false;
@@ -57,16 +55,51 @@ impl PreparedCertificate {
     }
 }
 
+/// Fully Cryptographically Portable Commit Certificate (First-Class Object)
+#[derive(Clone)]
+pub struct CommitCertificate {
+    pub view: u64,
+    pub seq: u64,
+    pub digest: [u8; 32],
+    pub signatures: HashMap<u32, G1Projective>,
+}
+
+impl CommitCertificate {
+    pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
+        if self.signatures.len() < quorum_size {
+            return false;
+        }
+
+        let mut canonical_msg = Vec::new();
+        canonical_msg.push(Phase::Commit as u8);
+        canonical_msg.extend_from_slice(&self.view.to_be_bytes());
+        canonical_msg.extend_from_slice(&self.seq.to_be_bytes());
+        canonical_msg.extend_from_slice(&self.digest);
+
+        let mut valid_count = 0;
+        for (&node_id, sig) in &self.signatures {
+            if let Some(pk) = public_keys.get(&node_id) {
+                if verify_bls_signature(&canonical_msg, sig, pk) {
+                    valid_count += 1;
+                }
+            }
+        }
+
+        valid_count >= quorum_size
+    }
+}
+
 pub struct PbftState {
     pub total_nodes: usize,
     pub f: usize,
     pub current_view: u64,
     pub highest_seq: u64,
     pub prepared_certificates: HashMap<(u64, u64), PreparedCertificate>,
+    pub commit_certificates: HashMap<(u64, u64), CommitCertificate>,
     pub committed_digest: HashMap<(u64, u64), [u8; 32]>,
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
-    commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
+    commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
     view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32])>>, 
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
@@ -96,8 +129,9 @@ impl PbftState {
         let mut recovered_seq = 0;
         let mut recovered_proposals = HashSet::new();
         let mut recovered_prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
-        let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>> = HashMap::new();
+        let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
         let mut recovered_certificates = HashMap::new();
+        let mut recovered_commit_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
         let quorum_size = 2 * f + 1;
 
@@ -124,10 +158,21 @@ impl PbftState {
                         }
                     }
                 }
-                2 => { 
-                    recovered_committed.insert((view, seq), digest); 
-                    let commit_v: &mut HashSet<u32> = recovered_commit_votes.entry((view, seq, digest)).or_default();
-                    commit_v.insert(sender_id);
+                2 => {
+                    let sigs = recovered_commit_votes.entry((view, seq, digest)).or_default();
+                    sigs.insert(sender_id, signature);
+                    if sigs.len() >= quorum_size {
+                        let commit_cert = CommitCertificate {
+                            view,
+                            seq,
+                            digest,
+                            signatures: sigs.clone(),
+                        };
+                        if commit_cert.verify(quorum_size, &initial_public_keys) {
+                            recovered_commit_certificates.insert((view, seq), commit_cert);
+                            recovered_committed.insert((view, seq), digest);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -139,6 +184,7 @@ impl PbftState {
             current_view: recovered_view,
             highest_seq: recovered_seq,
             prepared_certificates: recovered_certificates,
+            commit_certificates: recovered_commit_certificates,
             committed_digest: recovered_committed,
             pre_prepared_proposals: recovered_proposals,
             prepare_votes: recovered_prepare_votes,
@@ -208,11 +254,11 @@ impl PbftState {
                     };
                     
                     if !cert.verify(self.quorum_size, &self.public_keys) {
-                        return Err("CERTIFICATE_VERIFICATION_FAILED: Generated QC failed cryptographic signature verification!");
+                        return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Prepared QC failed cryptographic verification!");
                     }
 
                     self.prepared_certificates.insert((msg.view, msg.seq), cert);
-                    format!("✅ [VERIFIED PORTABLE CERTIFICATE CREATED]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq)
+                    format!("✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq)
                 } else {
                     format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
                 }
@@ -223,7 +269,7 @@ impl PbftState {
                     .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys));
 
                 if !has_valid_certificate {
-                    return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Quorum Certificate!");
+                    return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Prepared Certificate!");
                 }
 
                 if let Some(existing_digest) = self.committed_digest.get(&(msg.view, msg.seq)) {
@@ -232,14 +278,27 @@ impl PbftState {
                     }
                 }
 
-                let votes = self.commit_votes.entry((msg.view, msg.seq, msg.digest)).or_default();
-                votes.insert(msg.sender_id);
+                let proposal_key = (msg.view, msg.seq, msg.digest);
+                let sigs = self.commit_votes.entry(proposal_key).or_default();
+                sigs.insert(msg.sender_id, msg.signature);
 
-                if votes.len() >= self.quorum_size {
+                if sigs.len() >= self.quorum_size {
+                    let commit_cert = CommitCertificate {
+                        view: msg.view,
+                        seq: msg.seq,
+                        digest: msg.digest,
+                        signatures: sigs.clone(),
+                    };
+
+                    if !commit_cert.verify(self.quorum_size, &self.public_keys) {
+                        return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Commit Certificate failed cryptographic verification!");
+                    }
+
+                    self.commit_certificates.insert((msg.view, msg.seq), commit_cert);
                     self.committed_digest.insert((msg.view, msg.seq), msg.digest);
-                    format!("🏆 [COMMITTED]: Sequence {} definitively committed under View {}.", msg.seq, msg.view)
+                    format!("🏆 [COMMITTED WITH CERTIFICATE]: Sequence {} definitively committed under View {}.", msg.seq, msg.view)
                 } else {
-                    format!("⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, votes.len(), self.quorum_size)
+                    format!("⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
                 }
             }
 
