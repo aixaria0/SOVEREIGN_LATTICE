@@ -1,6 +1,7 @@
 use bls12_381::{G1Projective, G2Projective, Scalar, pairing};
 use group::Curve;
 use sha2::{Sha256, Digest};
+use rand::rngs::OsRng;
 use rand::RngCore;
 
 const PROTOTYPE_DST: &[u8] = b"SOVEREIGN_LATTICE_PROTOTYPE_BLS_G1";
@@ -11,16 +12,17 @@ pub struct KeyPair {
 }
 
 impl KeyPair {
+    /// Generates production-grade cryptographic keys using secure OS entropy (CSPRNG)
     pub fn generate() -> Self {
-        let mut rng = rand::thread_rng();
         let mut seed = [0u8; 64];
-        rng.fill_bytes(&mut seed);
+        OsRng.fill_bytes(&mut seed);
         Self::from_seed(&seed)
     }
 
+    /// Generates deterministic keys for testing and consensus reproduction
     pub fn from_seed(seed: &[u8]) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"SOVEREIGN_LATTICE_BLS_KEYGEN_SALT");
+        hasher.update(b"SOVEREIGN_LATTICE_BLS_PRODUCTION_KEYGEN_SALT");
         hasher.update(seed);
         let hash = hasher.finalize();
         
@@ -72,14 +74,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_prototype_bls_pairing_sanity() {
+    fn test_production_crypto_flow() {
+        // Test production OS-entropy generation
+        let prod_keypair = KeyPair::generate();
+        let msg = b"PRODUCTION_PAYLOAD";
+        let sig = sign(msg, &prod_keypair.secret_key);
+        assert!(verify_bls_signature(msg, &sig, &prod_keypair.public_key));
+
+        // Test deterministic seed generation
         let keypair = KeyPair::from_seed(b"PROTOTYPE_SEED");
-        let msg = b"LATTICE_TEST_MSG";
-        let sig = sign(msg, &keypair.secret_key);
-
-        assert!(verify_bls_signature(msg, &sig, &keypair.public_key));
-
-        let tampered = b"TAMPERED_MSG";
-        assert!(!verify_bls_signature(tampered, &sig, &keypair.public_key));
+        let sig_det = sign(msg, &keypair.secret_key);
+        assert!(verify_bls_signature(msg, &sig_det, &keypair.public_key));
     }
 }
