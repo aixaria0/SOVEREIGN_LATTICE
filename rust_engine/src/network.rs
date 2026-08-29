@@ -34,7 +34,7 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<Mutex<PbftState>>) 
     let mut payload = vec![0u8; payload_len];
     socket.read_exact(&mut payload).await?;
 
-    let phase = match payload[0] {
+    let _phase = match payload[0] {
         0 => Phase::PrePrepare,
         1 => Phase::Prepare,
         2 => Phase::Commit,
@@ -46,14 +46,10 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<Mutex<PbftState>>) 
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&payload[9..41]);
     
-    let sender_id = 0; 
-    // In production network stream, parse signature bytes and construct G1Projective
-    // Here we handle the message boundary route.
+    let _sender_id = 0; 
+    let _pbft = state.lock().await;
 
-    let mut pbft = state.lock().await;
-    // Real verification is handled inside via cryptographic bindings
     println!("🔍 [NETWORK]: Processing payload for seq {} under view {}", seq, view);
-
     socket.write_all(b"ACK_PBFT_FRAME_RECEIVED").await?;
     Ok(())
 }
