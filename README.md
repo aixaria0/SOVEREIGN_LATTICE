@@ -1,52 +1,70 @@
-# 🏛️ SOVEREIGN LATTICE
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Verified Engine](https://img.shields.io/badge/Verified-Lean_4-emerald.svg)](#-the-genesis-block-formal-verification)
-[![Runtime](https://img.shields.io/badge/Runtime-Rust_%2F_Tokio-orange.svg)](#-the-executable-layer-rust)
-**Sovereign Lattice** is a formally verified, Byzantine Fault Tolerant (BFT) consensus framework. It bridges the absolute certainty of Gödel-Löb provability logic with the high-performance execution of modern Rust cryptography and non-blocking asynchronous networking.
-By splitting the architecture into a strict mathematical verification layer and a high-speed runtime layer, Sovereign Lattice ensures that consensus safety is not just assumed, but mathematically proven before a single byte of data is transmitted.
----
-## 🔬 Architecture: The Two-Tier Engine
-Sovereign Lattice operates on a dual-layer architecture, isolating logical constraint proofs from asynchronous execution.
-### 1. The Genesis Block (Formal Verification in Lean 4)
-The core safety rules of the network are etched into **Lean 4**. This layer removes heuristic trust entirely, replacing it with machine-checked proofs.
-*   **Gödel-Löb Consistency:** Prevents circular self-justification within nodes.
-*   **The $\delta = 1$ Lock:** Mathematically ensures global unrestricted state and geometric boundaries.
-*   **BFT Safety Cores:** Formally verifies the `Commit implies Prepare` obligation across PBFT and HotStuff consensus models.
-*   **Omnipresence Protocol:** Inductively proves that honest paths propagate state without consistency collapse.
-### 2. The Executable Layer (Runtime in Rust & Tokio)
-The theoretical constraints proved in Lean 4 are mapped into a secure, event-driven runtime environment built in **Rust** and powered by **Tokio**.
-*   **Asynchronous PBFT Daemon (`src/main.rs`):** Non-blocking event loop utilizing `tokio::select!` for continuous state management, heartbeats, and dynamic view-change timeouts.
-*   **TCP Network Transport (`src/network.rs`):** High-concurrency socket listener ingesting live cryptographic payload events from external peer nodes.
-*   **Threshold Cryptography:** Implements Feldman VSS Distributed Key Generation (DKG).
-*   **BLS12-381 Aggregation:** Compact signature aggregation for scalable, verifiable Byzantine thresholds.
----
-## ⚙️ Core Capabilities
+<h1 align="center">⬡ SOVEREIGN LATTICE</h1>
+<h4 align="center">Formally Verified Asynchronous PBFT Consensus Engine</h4>
 
-| Feature | Description | Implementation |
-| :--- | :--- | :--- |
-| **BFT Consensus** | 3-Phase Commit (PBFT) & View-Change. | Lean 4 (Proof) / Rust (Logic) |
-| **Asynchronous Daemon** | Non-blocking event loop & timers. | Rust (`tokio`) |
-| **Network Transport** | TCP socket event ingestion layer. | Rust (`tokio::net::TcpListener`) |
-| **Threshold Sigs** | BLS & FROST partial signing/aggregation. | Rust (`bls12_381`) |
-| **Garbage Collection** | Stable checkpoints and watermark clearing. | Rust |
+<p align="center">
+  <a href="https://github.com/aixaria0/SOVEREIGN_LATTICE/actions">
+    <img src="https://github.com/aixaria0/SOVEREIGN_LATTICE/actions/workflows/verify.yml/badge.svg" alt="CI/CD Pipeline">
+  </a>
+  <a href="https://www.rust-lang.org/">
+    <img src="https://img.shields.io/badge/Rust-Tokio_Transport-000000?style=for-the-badge&logo=rust" alt="Rust">
+  </a>
+  <a href="https://leanprover.github.io/">
+    <img src="https://img.shields.io/badge/Lean_4-Formal_Proofs-4B0082?style=for-the-badge" alt="Lean 4">
+  </a>
+  <a href="https://github.com/aixaria0/SOVEREIGN_LATTICE">
+    <img src="https://img.shields.io/badge/Crypto-Threshold_BLS-00FF66?style=for-the-badge&color=050505" alt="Crypto">
+  </a>
+</p>
+
+<h3 align="center"><a href="https://aixaria0.github.io/SOVEREIGN_LATTICE/">🌐 LAUNCH LIVE COMMAND CENTER</a></h3>
 
 ---
-## 📂 Repository Structure
-*   `formal_verification/` — Lean 4 workspace containing the `GodelLobBFT` namespace and absolute proofs.
-*   `rust_engine/src/main.rs` — Core asynchronous PBFT consensus daemon and state machine.
-*   `rust_engine/src/network.rs` — TCP socket listener handling live peer-to-peer event streams.
-*   `rust_engine/` — Supporting cryptographic modules (Threshold BLS, Feldman DKG, Schnorr proofs, FROST).
-*   `docs/` — Theoretical framework and formalization strategies.
----
-## Verification Status
 
-The Rust and Lean verification workflows are automated via GitHub Actions on every commit:
-- `lake build`
+**Sovereign Lattice** is an experimental research prototype demonstrating the architectural integration of formal mathematical proofs (Lean 4) with a high-performance, asynchronous Byzantine Fault Tolerant (PBFT) networking engine (Rust).
+
+Unlike standard consensus engines that rely purely on runtime testing, this project establishes its foundational safety guarantees at the mathematical level using Gödel-Löb logic, while executing real-time cryptographic validation via Tokio.
+
+## 🏗️ Architecture & Core Components
+
+The architecture bridges the gap between theoretical consensus models and live network execution through three isolated but interconnected layers:
+
+### 1. Formal Verification Layer (Lean 4)
+The absolute truth of the consensus engine is strictly verified in `formal_verification/GodelLobBFT.lean`.
+* **Quorum Intersection:** Mathematically proven that no two honest quorums can intersect at a Byzantine node.
+* **PBFT Safety:** Formally verified that `Commit implies Prepare` and `Honest Prepare Uniqueness`, ensuring two conflicting block digests can never be committed at the same sequence height.
+
+### 2. Cryptographic Core (Rust)
+No mock cryptography. The engine evaluates actual signatures on the fly.
+* **Standardized Hash-to-Curve:** Full compliance with **RFC 9380** (`BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_`) preventing cross-protocol vulnerabilities.
+* **Threshold BLS12-381:** Utilizes optimal ate pairings `e(sig, G2) == e(H(m), pk)` to securely verify payload integrity.
+
+### 3. Asynchronous Transport (Tokio)
+* **Zero-Trust Framing:** Implementation of strict 4-byte length-prefixed payload framing.
+* **Memory Exhaustion Mitigation:** Hardcoded boundaries (40 to 4096 bytes) reject malformed, oversized, or microscopic frames before they reach the deserialization layer.
+
+---
+
+## 🛡️ Verification & Audit Status
+
+The current commit workflows are fully automated via GitHub Actions on every push:
+- `lake build` (Lean 4 Formal Proofs)
 - `cargo test --workspace --all-features`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
-These automated checks confirm reproducible builds and unit tests in a documented environment. This is currently an **experimental research prototype**. It is not an independent security audit, and the Lean model formally verifies structural BFT conditions, not the compiled Rust binary itself.
----
-## 🖋 Author
-**Aria Fani** | [AixAria](https://github.com/aixaria0)  
-*Architecting formally verified autonomy.*
+> **Note on Production Readiness:** These automated checks confirm reproducible builds, structural BFT conditions, and strict compiler hygiene in a documented environment. This repository is currently an **experimental research prototype**. It is not an independent security audit, and the Lean model formally verifies structural PBFT conditions, not the compiled Rust binary itself. 
+
+## 🚀 Quick Start (Local Daemon)
+
+Boot the secure daemon on your local environment:
+
+```bash
+cd rust_engine
+cargo run
+
+To test network framing and cryptographic payload ingestion, inject a zero-trust packet via the hardened TCP socket:
+cargo run --bin injector
+
+<p align="center">
+<b>Architect:</b> AixAria | <a href="https://github.com/aixaria0">@aixaria0</a>
+</p>
+
