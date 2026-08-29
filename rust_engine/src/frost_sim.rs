@@ -1,3 +1,5 @@
+// src/frost_sim.rs
+
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_TABLE;
@@ -14,14 +16,15 @@ pub fn simulate_frost_round<R: RngCore + CryptoRng>(rng: &mut R) -> bool {
     rng.fill_bytes(&mut bytes);
     let e = Scalar::from_bytes_mod_order(bytes);
 
-    // Compute public commitment safely using table multiplication
-    let r_point = &RISTRETTO_BASEPOINT_TABLE * &d;
+    // Compute public commitment safely without reference mismatch
+    let r_point = RISTRETTO_BASEPOINT_TABLE * d;
     
-    // Use Scalar::default() for zero initialization
-    let mut z = Scalar::default();
+    // Accumulate safely
+    let zero = Scalar::from(0u64);
+    let mut z = zero;
     z += d * e;
 
-    let success = r_point != RistrettoPoint::default();
+    let success = r_point != RistrettoPoint::default() && z != zero;
     
     if success {
         println!("✅ [FROST] Simulation passed successfully.");
