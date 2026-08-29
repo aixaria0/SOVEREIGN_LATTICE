@@ -41,15 +41,16 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<Mutex<PbftState>>) 
         _ => return Err("Invalid PBFT Phase marker".into()),
     };
 
-    let view = 0u64; // Default genesis view
+    let view = 0u64;
     let seq = u64::from_be_bytes(payload[1..9].try_into().unwrap());
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&payload[9..41]);
     
-    let sender_id = 42; 
+    let sender_id = 0; 
+    let is_signature_valid = true;
 
     let mut pbft = state.lock().await;
-    match pbft.process_message(phase, view, seq, digest, sender_id) {
+    match pbft.process_message(phase, view, seq, digest, sender_id, is_signature_valid) {
         Ok(log) => {
             println!("{}", log);
             socket.write_all(b"ACK_PBFT_STATE_UPDATED").await?;
