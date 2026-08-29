@@ -119,7 +119,6 @@ impl PbftState {
                             digest,
                             signatures: sigs.clone(),
                         };
-                        // Validate recovered certificate cryptographically
                         if cert.verify(quorum_size, &initial_public_keys) {
                             recovered_certificates.insert((view, seq), cert);
                         }
@@ -277,7 +276,6 @@ impl PbftState {
                     if max_seq > 0 {
                         self.highest_seq = self.highest_seq.max(max_seq);
                         
-                        // Gather verified signatures for the inherited certificate
                         let mut inherited_sigs = HashMap::new();
                         if let Some(existing_cert) = self.prepared_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest) {
                             inherited_sigs = existing_cert.signatures.clone();
@@ -308,4 +306,3 @@ impl PbftState {
         Ok(response)
     }
 }
-
