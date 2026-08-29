@@ -2,7 +2,7 @@ use std::fs::{OpenOptions, File};
 use std::io::{Write, Read, Seek, SeekFrom};
 use std::path::Path;
 use bls12_381::G1Projective;
-use group::Curve; // for to_affine / serialization support if needed or raw bytes
+use group::Curve;
 
 pub struct WriteAheadLog {
     file: File,
@@ -26,7 +26,6 @@ impl WriteAheadLog {
         self.file.write_all(&sender_id.to_be_bytes())?;
         self.file.write_all(digest)?;
         
-        // Serialize G1Projective to compressed or uncompressed bytes (48 bytes for compressed, 96 for uncompressed affine)
         let affine = signature.to_affine();
         let sig_bytes = affine.to_compressed();
         self.file.write_all(&sig_bytes)?;
