@@ -72,7 +72,13 @@ The absolute truth of the consensus engine is strictly verified in the `formal_v
 
 ### 🔐 2. Cryptographic Core (Rust)
 No mock cryptography. The engine evaluates actual, computationally heavy cryptographic signatures on the fly.
-* **Standardized Hash-to-Curve:** Full compliance with **RFC 9380** (`BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_`), strictly preventing cross-protocol vulnerabilities.
+# SOVEREIGN LATTICE: Formally Verified PBFT & BLS Consensus Prototype
+
+## Architectural Status
+* **Formal Core (Lean 4):** 100% formally verified safety core (`PBFT_Safety`, Quorum Intersection, and HonestState uniqueness) without axioms or `sorry`.
+* **Consensus Runtime (Rust):** PBFT state machine enforcing $2f+1$ quorum rules and strict equivocation checks matching the Lean model invariants.
+* **Cryptography (BLS12-381):** Algebraic pairing-based signature validation prototype (Note: Hash-to-curve uses a simplified algebraic scalar mapping rather than full RFC 9380 SSWU pipeline, intended for research and simulation purposes).
+(`BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_`), strictly preventing cross-protocol vulnerabilities.
 * **Threshold BLS12-381:** Utilizes optimal ate pairings $e(\sigma, G_2) == e(H(m), pk)$ to securely verify payload integrity before any state transitions occur.
 
 ### ⚡ 3. Asynchronous Transport (Tokio)
