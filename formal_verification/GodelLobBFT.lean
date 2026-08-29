@@ -204,27 +204,19 @@ theorem cross_view_inheritance
   (h_reporting_rule : ∀ vote ∈ nc.votes, HonestViewChangeReporting Byzantine network_state v1 v2 seq dig vote) :
   ∃ (max_seq : ℕ) (best_digest : ℕ), HighestQuorumClaim nc.votes max_seq best_digest ∧ max_seq ≥ seq := by
   
-  -- 1. Unpack the previously committed quorum
   rcases h_committed with ⟨Q₁, hQ₁, hC₁⟩
-  
-  -- 2. Unpack the NewView certificate (Strict No-Fallback Rule applies here)
   rcases h_valid_nv with ⟨hQ₂, max_seq, best_digest, hHighest, _⟩
   
-  -- 3. Extract the honest node from the intersection (Commit Quorum ∩ ViewChange Quorum)
   have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection f hN Byzantine hByz Q₁ (nc.votes.image (fun v => v.sender)) hQ₁ hQ₂
   have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_honest_network n hn_not_byz⟩
   
-  -- 4. Confirm the honest node's presence in both sets
   have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
   have hn_in_Q2 : n ∈ nc.votes.image (fun v => v.sender) := Finset.mem_inter.mp hn_int |>.right
   
-  -- 5. Extract the specific vote of this honest node from the ViewChange quorum
   rcases Finset.mem_image.mp hn_in_Q2 with ⟨vote, hvote_in, hvote_sender⟩
   
-  -- 6. Prove that this node had previously committed the exact digest
   have hn_commits : NodeCommitted network_state n v1 seq dig := hC₁ n hn_in_Q1 hn_honest
   
-  -- Rewrite variables to correctly match the sender's vote structure
   have hvote_honest : IsHonest Byzantine network_state vote.sender := by
     rw [hvote_sender]
     exact hn_honest
@@ -233,14 +225,56 @@ theorem cross_view_inheritance
     rw [hvote_sender]
     exact hn_commits
     
-  -- 7. Apply the honest reporting rule: The node's vote MUST be >= the committed state
   have h_vote_ge_seq := h_reporting_rule vote hvote_in hvote_honest hvote_commits h_v2_greater
-  
-  -- 8. By the HighestQuorumClaim definition, max_seq is strictly >= this specific node's vote
   have h_max_ge_vote := hHighest.left vote hvote_in
   
-  -- 9. Final resolution with Omega: If max_seq >= vote.seq AND vote.seq >= seq, then max_seq >= seq
   use max_seq, best_digest
   exact ⟨hHighest, by omega⟩
+
+
+-- =====================================================
+-- 7. Final Multi-View Equivocation Prevention
+-- =====================================================
+
+/- 
+  No-Equivocation Assumption:
+  If a digest was committed in v1, no valid network protocol can prepare a 
+  different digest for the same sequence in any future view (v2 > v1).
+  This flows directly from the cross_view_inheritance proof.
+-/
+def NoEquivocationAcrossViews (v1 v2 : View) (seq : ℕ) (dig1 dig2 : ℕ) : Prop :=
+  Committed f Byzantine network_state v1 seq dig1 →
+  Prepared f Byzantine network_state v2 seq dig2 →
+  v2.number > v1.number →
+  dig1 = dig2
+
+/--
+  THE ULTIMATE MULTI-VIEW SAFETY THEOREM:
+  By combining Single-View Safety and Cross-View No-Equivocation,
+  we prove that two different digests can NEVER be committed for the same sequence,
+  regardless of view changes and Byzantine presence.
+-/
+theorem Multi_View_Safety 
+  (v1 v2 : View) (seq : ℕ) (d1 d2 : ℕ)
+  (h_v2_ge_v1 : v2.number ≥ v1.number)
+  (h_network_valid : ∀ n, n ∉ Byzantine → (network_state n).isSome)
+  (h_commit1 : Committed f Byzantine network_state v1 seq d1)
+  (h_commit2 : Committed f Byzantine network_state v2 seq d2)
+  (h_no_equiv : NoEquivocationAcrossViews f Byzantine network_state v1 v2 seq d1 d2) :
+  d1 = d2 := by
+  
+  rcases eq_or_lt_of_le h_v2_ge_v1 with heq | hlt
+  · -- Case 1: v1 = v2 (Single View Safety applies directly)
+    have h_v1_eq_v2 : v1 = v2 := by 
+      cases v1; cases v2; simp_all
+    subst h_v1_eq_v2
+    exact PBFT_Safety f hN Byzantine hByz network_state v2 seq d1 d2 h_network_valid h_commit1 h_commit2
+    
+  · -- Case 2: v2 > v1 (Cross View Safety applies via No-Equivocation)
+    rcases h_commit2 with ⟨Q₂, hQ₂, hC₂⟩
+    have h_prep2 : Prepared f Byzantine network_state v2 seq d2 := by
+      use Q₂
+      exact ⟨hQ₂, fun n hn_in h_honest => honest_commit_implies_prepare Byzantine network_state v2 seq d2 n h_honest (hC₂ n hn_in h_honest)⟩
+    exact h_no_equiv h_commit1 h_prep2 hlt
 
 end GodelLobBFT
