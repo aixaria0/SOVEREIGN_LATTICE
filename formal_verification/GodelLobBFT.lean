@@ -127,7 +127,6 @@ theorem PBFT_Safety (v : View) (seq : ℕ) (d₁ d₂ : ℕ)
   
   exact honest_prepare_unique Byzantine network_state v seq d₁ d₂ n hn_honest hn_prepares_d1 hn_prepares_d2
 
-
 -- =====================================================
 -- 5. Strict View-Change & NewView Semantics (No Fallback)
 -- =====================================================
@@ -176,24 +175,12 @@ def ValidNewView (nc : NewViewCertificate) : Prop :=
 -- 6. Multi-View Safety Base (Cross-View Inheritance)
 -- =====================================================
 
-/- 
-  Honest Reporting Rule:
-  If an honest node committed a sequence in a previous view (v1),
-  its vote in any subsequent ViewChange (v2 > v1) MUST report a sequence 
-  that is at least as high as what it committed.
--/
 def HonestViewChangeReporting (v1 : View) (v2 : View) (seq : ℕ) (dig : ℕ) (vote : ViewChangeVote) : Prop :=
   IsHonest Byzantine network_state vote.sender →
   NodeCommitted network_state vote.sender v1 seq dig →
   v2.number > v1.number →
   vote.seq ≥ seq
 
-/-- 
-  CROSS-VIEW SAFETY LEMMA (The Core Mechanism):
-  If a sequence was committed in v1, and a NewView is constructed for v2 (v2 > v1),
-  the intersection of the Commit Quorum and the ViewChange Quorum guarantees
-  that the strict NewView Certificate WILL inherit a sequence >= the committed one.
--/
 theorem cross_view_inheritance 
   (v1 v2 : View) (seq : ℕ) (dig : ℕ) (nc : NewViewCertificate)
   (h_v2_greater : v2.number > v1.number)
@@ -216,14 +203,10 @@ theorem cross_view_inheritance
   rcases Finset.mem_image.mp hn_in_Q2 with ⟨vote, hvote_in, hvote_sender⟩
   
   have hn_commits : NodeCommitted network_state n v1 seq dig := hC₁ n hn_in_Q1 hn_honest
-  
   have hvote_honest : IsHonest Byzantine network_state vote.sender := by
-    rw [hvote_sender]
-    exact hn_honest
-    
+    rw [hvote_sender]; exact hn_honest
   have hvote_commits : NodeCommitted network_state vote.sender v1 seq dig := by
-    rw [hvote_sender]
-    exact hn_commits
+    rw [hvote_sender]; exact hn_commits
     
   have h_vote_ge_seq := h_reporting_rule vote hvote_in hvote_honest hvote_commits h_v2_greater
   have h_max_ge_vote := hHighest.left vote hvote_in
@@ -231,29 +214,16 @@ theorem cross_view_inheritance
   use max_seq, best_digest
   exact ⟨hHighest, by omega⟩
 
-
 -- =====================================================
 -- 7. Final Multi-View Equivocation Prevention
 -- =====================================================
 
-/- 
-  No-Equivocation Assumption:
-  If a digest was committed in v1, no valid network protocol can prepare a 
-  different digest for the same sequence in any future view (v2 > v1).
-  This flows directly from the cross_view_inheritance proof.
--/
 def NoEquivocationAcrossViews (v1 v2 : View) (seq : ℕ) (dig1 dig2 : ℕ) : Prop :=
   Committed f Byzantine network_state v1 seq dig1 →
   Prepared f Byzantine network_state v2 seq dig2 →
   v2.number > v1.number →
   dig1 = dig2
 
-/--
-  THE ULTIMATE MULTI-VIEW SAFETY THEOREM:
-  By combining Single-View Safety and Cross-View No-Equivocation,
-  we prove that two different digests can NEVER be committed for the same sequence,
-  regardless of view changes and Byzantine presence.
--/
 theorem Multi_View_Safety 
   (v1 v2 : View) (seq : ℕ) (d1 d2 : ℕ)
   (h_v2_ge_v1 : v2.number ≥ v1.number)
@@ -262,19 +232,56 @@ theorem Multi_View_Safety
   (h_commit2 : Committed f Byzantine network_state v2 seq d2)
   (h_no_equiv : NoEquivocationAcrossViews f Byzantine network_state v1 v2 seq d1 d2) :
   d1 = d2 := by
-  
   rcases eq_or_lt_of_le h_v2_ge_v1 with heq | hlt
-  · -- Case 1: v1 = v2 (Single View Safety applies directly)
-    have h_v1_eq_v2 : v1 = v2 := by 
-      cases v1; cases v2; simp_all
+  · have h_v1_eq_v2 : v1 = v2 := by cases v1; cases v2; simp_all
     subst h_v1_eq_v2
     exact PBFT_Safety f hN Byzantine hByz network_state v2 seq d1 d2 h_network_valid h_commit1 h_commit2
-    
-  · -- Case 2: v2 > v1 (Cross View Safety applies via No-Equivocation)
-    rcases h_commit2 with ⟨Q₂, hQ₂, hC₂⟩
+  · rcases h_commit2 with ⟨Q₂, hQ₂, hC₂⟩
     have h_prep2 : Prepared f Byzantine network_state v2 seq d2 := by
       use Q₂
       exact ⟨hQ₂, fun n hn_in h_honest => honest_commit_implies_prepare Byzantine network_state v2 seq d2 n h_honest (hC₂ n hn_in h_honest)⟩
     exact h_no_equiv h_commit1 h_prep2 hlt
+
+
+-- =====================================================
+-- 8. Rust Implementation Correspondence (State Transitions)
+-- =====================================================
+
+/-
+  To bridge the gap between our Rust code and Lean proofs, we define the exact 
+  state transition logic executed by `PbftState::handle_message` in Rust.
+-/
+
+/-- 
+  Inductive type representing a valid state transition in our Rust node.
+  This models the `Phase::Commit` branch in Rust where a node updates its state.
+-/
+inductive PbftRustStep : (Node → Option HonestState) → (Node → Option HonestState) → Prop
+| commit_message (st1 st2 : Node → Option HonestState) (n : Node) (v : View) (seq dig : ℕ) (old_state new_state : HonestState)
+    -- Initial state extraction
+    (h_st1_n : st1 n = some old_state)
+    -- Target state extraction
+    (h_st2_n : st2 n = some new_state)
+    
+    -- RUST LOGIC 1: `let has_valid_certificate = self.prepared_certificates...`
+    -- The node MUST have previously prepared this digest (Strict PBFT Rule)
+    (h_prep : old_state.prepared v seq = some dig) 
+    
+    -- RUST LOGIC 2: `self.committed_digest.insert((msg.view, msg.seq), msg.digest);`
+    -- The node successfully updates its commit memory
+    (h_new_commit : new_state.committed v seq = some dig)
+    
+    -- Invariant: Preparing state is unaltered during a commit
+    (h_preserve_prep : new_state.prepared = old_state.prepared)
+    
+    -- Invariant: No other node is affected by this local execution
+    (h_others : ∀ x, x ≠ n → st2 x = st1 x) :
+    PbftRustStep st1 st2
+
+/-
+  Our next goal (which sets the stage for the final correspondence proof) 
+  will be to mathematically demonstrate that applying `PbftRustStep` in sequence 
+  will endlessly preserve `Multi_View_Safety`.
+-/
 
 end GodelLobBFT
