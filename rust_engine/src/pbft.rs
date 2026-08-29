@@ -21,7 +21,6 @@ pub struct PbftMessage {
     pub signature: G1Projective,
 }
 
-/// Fully Cryptographically Portable Prepared Certificate
 #[derive(Clone)]
 pub struct PreparedCertificate {
     pub view: u64,
@@ -55,7 +54,6 @@ impl PreparedCertificate {
     }
 }
 
-/// Fully Cryptographically Portable Commit Certificate
 #[derive(Clone)]
 pub struct CommitCertificate {
     pub view: u64,
@@ -89,29 +87,34 @@ impl CommitCertificate {
     }
 }
 
-/// First-Class NewView Certificate carrying safety evidence across view transitions
+/// Fully Bound & Cryptographically Verified NewView Certificate
 #[derive(Clone)]
 pub struct NewViewCertificate {
     pub target_view: u64,
-    pub highest_seq: u64,
-    pub highest_digest: [u8; 32],
-    pub signatures: HashMap<u32, G1Projective>,
+    pub view_change_signatures: HashMap<u32, G1Projective>,
+    pub selected_prepared_certificate: Option<PreparedCertificate>,
 }
 
 impl NewViewCertificate {
     pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
-        if self.signatures.len() < quorum_size {
+        if self.view_change_signatures.len() < quorum_size {
             return false;
         }
 
+        // 1. Verify bound prepared certificate if present
+        if let Some(ref cert) = self.selected_prepared_certificate {
+            if !cert.verify(quorum_size, public_keys) {
+                return false;
+            }
+        }
+
+        // 2. Verify ViewChange signatures
         let mut canonical_msg = Vec::new();
         canonical_msg.push(Phase::ViewChange as u8);
         canonical_msg.extend_from_slice(&self.target_view.to_be_bytes());
-        canonical_msg.extend_from_slice(&self.highest_seq.to_be_bytes());
-        canonical_msg.extend_from_slice(&self.highest_digest);
 
         let mut valid_count = 0;
-        for (&node_id, sig) in &self.signatures {
+        for (&node_id, sig) in &self.view_change_signatures {
             if let Some(pk) = public_keys.get(&node_id) {
                 if verify_bls_signature(&canonical_msg, sig, pk) {
                     valid_count += 1;
@@ -165,6 +168,7 @@ impl PbftState {
         let mut recovered_proposals = HashSet::new();
         let mut recovered_prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
         let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
+        let mut recovered_view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>> = HashMap::new();
         let mut recovered_certificates = HashMap::new();
         let mut recovered_commit_certificates = HashMap::new();
         let mut recovered_new_view_certificates = HashMap::new();
@@ -211,7 +215,29 @@ impl PbftState {
                     }
                 }
                 3 => {
-                    // ViewChange replay tracking can be extended if needed
+                    let supporters = recovered_view_change_votes.entry(view).or_default();
+                    supporters.insert(sender_id, (seq, digest, signature));
+                    if supporters.len() >= quorum_size {
+                        let mut vc_sigs = HashMap::new();
+                        let mut max_seq = 0;
+                        let mut best_digest = [0u8; 32];
+                        for (&sid, &(s, d, sig)) in supporters.iter() {
+                            vc_sigs.insert(sid, sig);
+                            if s > max_seq {
+                                max_seq = s;
+                                best_digest = d;
+                            }
+                        }
+                        let bound_cert = recovered_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest).cloned();
+                        let nv_cert = NewViewCertificate {
+                            target_view: view,
+                            view_change_signatures: vc_sigs,
+                            selected_prepared_certificate: bound_cert,
+                        };
+                        if nv_cert.verify(quorum_size, &initial_public_keys) {
+                            recovered_new_view_certificates.insert(view, nv_cert);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -229,7 +255,7 @@ impl PbftState {
             pre_prepared_proposals: recovered_proposals,
             prepare_votes: recovered_prepare_votes,
             commit_votes: recovered_commit_votes,
-            view_change_votes: HashMap::new(),
+            view_change_votes: recovered_view_change_votes,
             quorum_size,
             registered_nodes,
             public_keys: initial_public_keys,
@@ -378,18 +404,20 @@ impl PbftState {
                         self.highest_seq = self.highest_seq.max(max_seq);
                     }
 
+                    let bound_cert = self.prepared_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest).cloned();
+
                     let new_view_cert = NewViewCertificate {
                         target_view: msg.view,
-                        highest_seq: max_seq,
-                        highest_digest: best_digest,
-                        signatures: view_change_sigs,
+                        view_change_signatures: view_change_sigs,
+                        selected_prepared_certificate: bound_cert,
                     };
 
-                    if new_view_cert.verify(self.quorum_size, &self.public_keys) {
-                        self.new_view_certificates.insert(msg.view, new_view_cert);
+                    if !new_view_cert.verify(self.quorum_size, &self.public_keys) {
+                        return Err("NEW_VIEW_VERIFICATION_FAILED: NewViewCertificate cryptographic verification failed!");
                     }
 
-                    format!("🔄 [NEW VIEW CERTIFICATE CREATED]: Quorum reached for View {}. Highest inherited Seq: {}", msg.view, max_seq)
+                    self.new_view_certificates.insert(msg.view, new_view_cert);
+                    format!("🔄 [BOUND NEW VIEW CERTIFICATE CREATED]: Quorum reached for View {}.", msg.view)
                 } else {
                     format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
