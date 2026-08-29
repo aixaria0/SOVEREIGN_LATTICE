@@ -3,7 +3,6 @@ use group::Curve;
 use sha2::{Sha256, Digest};
 use rand::RngCore;
 
-// Custom Domain Separation for Prototype Signature (Explicitly NOT claiming RFC 9380 compliance)
 const PROTOTYPE_DST: &[u8] = b"SOVEREIGN_LATTICE_PROTOTYPE_BLS_G1";
 
 pub struct KeyPair {
@@ -36,7 +35,6 @@ impl KeyPair {
     }
 }
 
-/// Prototype hash-to-curve wrapper (Algebraically sound pairing check, but lacks full SSWU map-to-curve pipeline)
 pub fn hash_message_to_g1(message: &[u8]) -> G1Projective {
     let mut hasher = Sha256::new();
     hasher.update(PROTOTYPE_DST);
