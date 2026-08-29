@@ -2,13 +2,15 @@ use std::collections::{HashMap, HashSet};
 use bls12_381::{G1Projective, G2Projective};
 use crate::threshold_bls::verify_bls_signature;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    PrePrepare,
-    Prepare,
-    Commit,
+    PrePrepare = 0,
+    Prepare = 1,
+    Commit = 2,
 }
 
+/// Fully integrated cryptographic PBFT message structure
+#[derive(Clone)]
 pub struct PbftMessage {
     pub phase: Phase,
     pub view: u64,
@@ -68,7 +70,7 @@ impl PbftState {
         (view % self.total_nodes as u64) as u32
     }
 
-    /// Handles network messages with native, un-bypassed BLS signature verification
+    /// Handles network messages with native, un-bypassed BLS signature verification and strict leader checks
     pub fn handle_message(&mut self, msg: &PbftMessage) -> Result<String, &'static str> {
         if !self.registered_nodes.contains(&msg.sender_id) {
             return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
@@ -79,11 +81,7 @@ impl PbftState {
 
         // Canonical message serialization for cryptographic binding
         let mut canonical_msg = Vec::new();
-        canonical_msg.push(match msg.phase {
-            Phase::PrePrepare => 0,
-            Phase::Prepare => 1,
-            Phase::Commit => 2,
-        });
+        canonical_msg.push(msg.phase as u8);
         canonical_msg.extend_from_slice(&msg.view.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.seq.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.digest);
@@ -154,5 +152,65 @@ impl PbftState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::threshold_bls::{KeyPair, sign};
+
+    #[test]
+    fn test_perfect_10_consensus_flow() {
+        let mut pks = HashMap::new();
+        let mut keys = HashMap::new();
+        for i in 0..4 {
+            let kp = KeyPair::from_seed(format!("NODE_SEED_{}", i).as_bytes());
+            pks.insert(i, kp.public_key);
+            keys.insert(i, kp);
+        }
+
+        let mut state = PbftState::new(4, pks).unwrap();
+        let view: u64 = 0;
+        let seq: u64 = 1;
+        let digest = [0x55; 32];
+
+        // 1. Test Leader Pre-Prepare
+        let mut canonical = vec![Phase::PrePrepare as u8];
+        canonical.extend_from_slice(&view.to_be_bytes());
+        canonical.extend_from_slice(&seq.to_be_bytes());
+        canonical.extend_from_slice(&digest);
+
+        let leader_sig = sign(&canonical, &keys.get(&0).unwrap().secret_key);
+        let pre_msg = PbftMessage {
+            phase: Phase::PrePrepare,
+            view,
+            seq,
+            digest,
+            sender_id: 0,
+            signature: leader_sig,
+        };
+        assert!(state.handle_message(&pre_msg).is_ok());
+
+        // 2. Test Quorum Prepare Votes (3 nodes required for N=4)
+        let mut prep_canonical = vec![Phase::Prepare as u8];
+        prep_canonical.extend_from_slice(&view.to_be_bytes());
+        prep_canonical.extend_from_slice(&seq.to_be_bytes());
+        prep_canonical.extend_from_slice(&digest);
+
+        for i in 0..3 {
+            let sig = sign(&prep_canonical, &keys.get(&i).unwrap().secret_key);
+            let msg = PbftMessage {
+                phase: Phase::Prepare,
+                view,
+                seq,
+                digest,
+                sender_id: i,
+                signature: sig,
+            };
+            assert!(state.handle_message(&msg).is_ok());
+        }
+
+        assert_eq!(state.prepared_digest.get(&(view, seq)), Some(&digest));
     }
 }
