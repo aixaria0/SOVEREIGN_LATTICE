@@ -1,69 +1,94 @@
-<div align="center">
+# Sovereign Lattice: Provably Infallible BFT Consensus Engine 📐🦀
 
-# Sovereign Lattice
-### Provably Secure BFT Consensus Engine
+> **Sovereign Lattice** is a next-generation Byzantine Fault Tolerant (BFT) consensus protocol that replaces traditional heuristic and probabilistic safety with absolute, machine-checked mathematical certainty. 
 
-*Engineered and Formally Verified by **Aria Fani** ([AixAria](https://github.com/AixAria0))*
-
-</div>
+Developed by **Aria Fani** under **AixAria**, Sovereign Lattice introduces a novel **Dual-Layer Architecture** that decouples formal mathematical proofs from high-performance execution. By utilizing **Gödel-Löb provability logic**, the protocol guarantees that historical consistency and state immutability are absolute logical truths rather than empirical estimates.
 
 ---
 
-# SOVEREIGN LATTICE: The Blueprint of Infallible Consensus
+## 🚀 The Paradigm Shift
 
-## 1. Abstract
-Current Byzantine Fault Tolerant (BFT) systems rely on heuristic safety assumptions and probabilistic finality. **Sovereign Lattice** introduces a paradigm shift: a mathematically verified consensus framework bound by Gödel-Löb provability logic, executed in a high-performance Rust environment.
+For nearly fifty years, distributed consensus protocols have designed for "probabilistic" security. In high-stakes, safety-critical networks, a "low probability of failure" is still an existential risk. 
 
-## 2. Dual-Layer Architecture
-The system is strictly divided into two operational planes to isolate logical constraints from asynchronous network execution:
+**Sovereign Lattice breaks this paradigm:**
 
-*   **The Provability Plane (Lean 4):** Acts as the absolute Genesis Block. It verifies the $\delta = 1$ state and ensures that network consistency is not just achieved, but logically infallible. It formally discharges BFT safety obligations, such as proving that a `Commit` strictly implies a valid `Prepare` phase.
-*   **The Execution Plane (Rust):** An asynchronous, event-driven state machine handling real-time replication, garbage collection, and node timeout management without compromising the proved constraints.
-
-## 3. Cryptographic Foundation
-Sovereign Lattice leverages state-of-the-art threshold cryptography to ensure scalability and Byzantine resistance:
-*   **Distributed Key Generation (DKG):** Feldman VSS integrated with Non-Interactive Zero-Knowledge (NIZK) Schnorr proofs for publicly verifiable share distribution.
-*   **Signature Aggregation:** Threshold BLS over the BLS12-381 curve ensures constant-time verification and minimal bandwidth overhead, regardless of the validator count.
-*   **FROST Integration:** A highly optimized two-round threshold Schnorr signing protocol for low-latency state confirmation.
+| Metric | Traditional BFT (e.g., PBFT) | Sovereign Lattice |
+| :--- | :--- | :--- |
+| **Safety Assurance** | Empirical, heuristic, or model-checked | **Zero-Axiom, Machine-Checked Proof** |
+| **Consensus Invariants** | Probabilistic or runtime-dependent | **Gödel-Löb Provability Logic** |
+| **Architecture** | Coupled execution and voting | **Decoupled Provability & Execution** |
+| **Recovery Fallbacks** | Complex, multi-stage, drift-prone | **Strict No-Fallback (Zero-Drift)** |
 
 ---
 
-## Core Invariants & Strict Semantics
-*   **Strict No-Fallback Semantics:** Purges ambiguous quorum fallbacks during view changes. Any invalid `NewView` certificate triggers an immediate `MISSING_QUORUM_CERTIFICATE` rejection.
-*   **Dual-Path Alignment:** Live execution paths and Write-Ahead Log (WAL) crash recovery share identical state-machine invariants, preventing state drift.
-*   **Zero-Axiom Lean Verification:** The multi-view safety core is formally verified in Lean 4 with **zero axioms and zero `sorry` placeholders**, guaranteeing permanent historical immutability.
+## 🏗️ Dual-Layer Architecture
+
+Sovereign Lattice enforces a clean separation of concerns to prevent runtime ambiguities and protocol drift:
+
+```
+                     ┌───────────────────────────┐
+                     │     PROVABILITY PLANE     │
+                     │         (Lean 4)          │
+                     └─────────────┬─────────────┘
+                                   │
+                     ★ Mathematical Verification Bridge
+                                   │
+                     ┌─────────────▼─────────────┐
+                     │      EXECUTION PLANE      │
+                     │          (Rust)           │
+                     └───────────────────────────┘
+```
+
+### 1. The Provability Plane (Lean 4)
+* **Mathematical Synthesis:** Formalizes BFT safety and network invariants with **zero axioms** and **zero "sorry" placeholders**.
+* **Gödel-Löb Logic:** Proves that validator commits are logically tied to historical, immutable ledger consensus.
+* **Machine-Checked Invariants:**
+  * **Quorum Intersection:** Proves that in a network of $N = 3f + 1$, any two quorums of size $2f + 1$ intersect at a minimum of $f + 1$ nodes.
+  * **Single-View Safety:** Proves conflicting digests can never be committed within the same view.
+  * **Cross-View Inheritance:** Mathematically guarantees that newly elected leaders inherit all historically committed transactions from previous views.
+  * **Multi-View Safety:** Ensures absolute historical immutability across leader transitions.
+
+### 2. The Execution Plane (Rust)
+* **High-Throughput Runtime:** An asynchronous, event-driven state machine engineered for high-throughput data replication.
+* **Strict Semantics:** Implements **Strict No-Fallback Semantics**. A failure in view-change validation immediately yields a `MISSING_QUORUM_CERTIFICATE` error, eliminating unpredictable state drifts.
+* **Threshold Cryptography:**
+  * **BLS12-381 Signatures:** Fixed-size signature aggregation reducing network overhead.
+  * **FROST Protocol:** Two-round threshold Schnorr signatures optimized for secure, low-latency transaction finality.
 
 ---
 
-## Repository Structure
+## ⚙️ Building and Verifying
 
-- `src/pbft.rs` — Core consensus engine, strict NewView verification, and state machine logic.
-- `lean/GodelLobBFT.lean` — Formal verification proofs of Quorum Intersection, Single-View Safety, and Multi-View Equivocation Prevention.
-- `tests/byzantine_cluster.rs` — Adversarial integration test suite validating fault injection and strict error handling.
-- `docs/whitepaper.md` — Full academic whitepaper and architectural specification.
-
----
-
-## Formal Verification Layer (Mathematical Invariants)
-
-Our formal specification models honest local memory traces (`Option` semantics) and machine-checks absolute safety theorems with zero axioms and zero `sorry` placeholders in **Lean 4**:
-
-- **Quorum Intersection (`quorum_intersection_size`):** In a network of $N = 3f + 1$, any two quorums of size $\ge 2f + 1$ intersect at least in $f + 1$ nodes.
-- **Single-View Safety (`PBFT_Safety`):** Conflicting digests can never be committed within the same view.
-- **Cross-View Inheritance (`cross_view_inheritance`):** View changes strictly inherit prior commitments via honest quorum overlaps.
-- **Multi-View Safety (`Multi_View_Safety`):** Global historical immutability is preserved across arbitrary leader changes and view transitions.
-
-**Check Formal Proofs (Lean 4 Engine):**
+### Invariant Verification (Lean 4)
+To compile and verify the formal proofs:
 ```bash
+cd provability_plane
 lake build
+```
 
-Operational Testing & Execution (Rust Runtime)
-Running Byzantine Integration Tests
-Execute the adversarial test suite via Cargo to validate runtime fault isolation, strict error checking, and no-fallback enforcement:
-cargo test --test byzantine_cluster
+### High-Performance Runtime (Rust)
+To build the consensus engine in release mode:
+```bash
+cd execution_plane
+cargo build --release
+```
 
-Author & Lab
- * Principal Architect: Aria Fani
- * Research Brand: AixAria
- * License: MIT
+---
+
+## 👤 Author & Research Hub
+
+* **Creator & Lead Architect:** Aria Fani
+* **Research Brand:** AixAria
+* **Project Status:** Active / Open-Source
+
+For inquiries regarding research collaboration, integration, or formal verification consulting, please contact the **AixAria** research team.
+
+---
+
+## 📄 License
+
+Sovereign Lattice is licensed under the Apache 2.0 / MIT License.
+```
+
+
 
