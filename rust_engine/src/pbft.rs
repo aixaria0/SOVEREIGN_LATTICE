@@ -7,6 +7,7 @@ pub enum Phase {
     Commit,
 }
 
+/// Represents the executable state machine mirroring Lean 4's HonestState model
 pub struct PbftState {
     pub prepared_digest: HashMap<(u64, u64), [u8; 32]>,
     pub committed_digest: HashMap<(u64, u64), [u8; 32]>,
@@ -27,6 +28,7 @@ impl PbftState {
         }
     }
 
+    /// Enforces state transitions corresponding identically to Lean 4 formal safety theorems
     pub fn process_message(
         &mut self,
         phase: Phase,
@@ -41,6 +43,7 @@ impl PbftState {
             }
 
             Phase::Prepare => {
+                // Lean correspondence invariant: honest_prepare_unique
                 if let Some(existing_digest) = self.prepared_digest.get(&(view, seq)) {
                     if existing_digest != &digest {
                         return Err("EQUIVOCATION_DETECTED: Conflicting PREPARE digest for same sequence!");
@@ -59,6 +62,7 @@ impl PbftState {
             }
 
             Phase::Commit => {
+                // Lean correspondence invariant: honest_commit_implies_prepare
                 if !self.prepared_digest.contains_key(&(view, seq)) {
                     return Err("SAFETY_VIOLATION: Node cannot commit an un-prepared sequence!");
                 }
@@ -118,12 +122,10 @@ mod rigorous_and_adversarial_tests {
         let honest_digest = [0x11; 32];
         let malicious_digest = [0x99; 32];
 
-        // First, achieve quorum so the state gets locked/prepared on honest_digest
         assert!(state.process_message(Phase::Prepare, view, seq, honest_digest, 1).is_ok());
         assert!(state.process_message(Phase::Prepare, view, seq, honest_digest, 2).is_ok());
         assert!(state.process_message(Phase::Prepare, view, seq, honest_digest, 3).is_ok());
 
-        // Now, node 4 tries to send a conflicting digest after quorum is locked (Equivocation)
         let equivocation_attempt = state.process_message(Phase::Prepare, view, seq, malicious_digest, 4);
         
         assert!(equivocation_attempt.is_err());
@@ -149,3 +151,4 @@ mod rigorous_and_adversarial_tests {
         );
     }
 }
+
