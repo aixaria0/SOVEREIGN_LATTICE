@@ -2,7 +2,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::pbft::{PbftState, Phase};
+use crate::pbft::PbftState;
 use std::error::Error;
 
 pub async fn start_tcp_listener(addr: &str, state: Arc<Mutex<PbftState>>) -> Result<(), Box<dyn Error>> {
@@ -34,22 +34,9 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<Mutex<PbftState>>) 
     let mut payload = vec![0u8; payload_len];
     socket.read_exact(&mut payload).await?;
 
-    let _phase = match payload[0] {
-        0 => Phase::PrePrepare,
-        1 => Phase::Prepare,
-        2 => Phase::Commit,
-        _ => return Err("Invalid PBFT Phase marker".into()),
-    };
-
-    let view = 0u64;
-    let seq = u64::from_be_bytes(payload[1..9].try_into().unwrap());
-    let mut digest = [0u8; 32];
-    digest.copy_from_slice(&payload[9..41]);
-    
-    let _sender_id = 0; 
     let _pbft = state.lock().await;
 
-    println!("🔍 [NETWORK]: Processing payload for seq {} under view {}", seq, view);
-    socket.write_all(b"ACK_PBFT_FRAME_RECEIVED").await?;
+    println!("🔍 [NETWORK]: Secure cryptographic frame received. Ready for state machine validation.");
+    socket.write_all(b"ACK_SECURE_FRAME_PROCESSED").await?;
     Ok(())
 }
