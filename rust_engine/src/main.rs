@@ -1,6 +1,7 @@
 mod network;
 mod threshold_bls;
 mod pbft;
+mod wal;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
