@@ -101,9 +101,25 @@ impl NewViewCertificate {
             return false;
         }
 
+        // Determine the highest sequence claimed by the Quorum
+        let max_quorum_seq = self.view_change_votes.values().map(|&(s, _, _)| s).max().unwrap_or(0);
+        let best_digest = self.view_change_votes.values()
+            .find(|&&(s, _, _)| s == max_quorum_seq)
+            .map(|&(_, d, _)| d)
+            .unwrap_or([0u8; 32]);
+
+        // STRICT INVARIANT: The attached certificate must cryptographically match the quorum's highest claim.
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
                 return false;
+            }
+            if cert.seq != max_quorum_seq || cert.digest != best_digest {
+                return false; // Safety Violation: Attached cert does not match quorum agreement!
+            }
+        } else {
+            // If no certificate is attached, the quorum MUST have legitimately claimed sequence 0.
+            if max_quorum_seq > 0 {
+                return false; // Safety Violation: Quorum claimed a state, but evidence is missing!
             }
         }
 
@@ -224,24 +240,24 @@ impl PbftState {
                             .map(|&(_, d, _)| d)
                             .unwrap_or([0u8; 32]);
 
-                        let mut bound_cert = recovered_certificates.values()
-                            .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(quorum_size, &initial_public_keys))
-                            .cloned();
-
-                        if bound_cert.is_none() {
-                            bound_cert = recovered_certificates.values()
-                                .filter(|c| c.verify(quorum_size, &initial_public_keys))
-                                .max_by_key(|c| c.seq)
-                                .cloned();
-                        }
-
-                        let nv_cert = NewViewCertificate {
-                            target_view: view,
-                            view_change_votes: supporters.clone(),
-                            selected_prepared_certificate: bound_cert,
+                        let bound_cert = if max_quorum_seq > 0 {
+                            recovered_certificates.values()
+                                .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(quorum_size, &initial_public_keys))
+                                .cloned()
+                        } else {
+                            None
                         };
-                        if nv_cert.verify(quorum_size, &initial_public_keys) {
-                            recovered_new_view_certificates.insert(view, nv_cert);
+
+                        // Strict WAL Replay: Only reconstruct NewView if we possess the legitimate quorum-sourced evidence
+                        if max_quorum_seq == 0 || bound_cert.is_some() {
+                            let nv_cert = NewViewCertificate {
+                                target_view: view,
+                                view_change_votes: supporters.clone(),
+                                selected_prepared_certificate: bound_cert,
+                            };
+                            if nv_cert.verify(quorum_size, &initial_public_keys) {
+                                recovered_new_view_certificates.insert(view, nv_cert);
+                            }
                         }
                     }
                 }
@@ -394,27 +410,25 @@ impl PbftState {
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
                     
-                    let mut view_change_sigs = HashMap::new();
-                    for (&supporter_id, &(_, _, sig)) in supporters.iter() {
-                        view_change_sigs.insert(supporter_id, sig);
-                    }
-                    
                     let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
                     let best_digest = supporters.values()
                         .find(|&&(s, _, _)| s == max_quorum_seq)
                         .map(|&(_, d, _)| d)
                         .unwrap_or([0u8; 32]);
 
-                    let mut bound_cert = self.prepared_certificates.values()
-                        .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
-                        .cloned();
-
-                    if bound_cert.is_none() {
-                        bound_cert = self.prepared_certificates.values()
-                            .filter(|c| c.verify(self.quorum_size, &self.public_keys))
-                            .max_by_key(|c| c.seq)
+                    let bound_cert = if max_quorum_seq > 0 {
+                        let cert_opt = self.prepared_certificates.values()
+                            .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
                             .cloned();
-                    }
+                        
+                        // Strict Invariant: No Fallback. If quorum claims a high-seq QC and we don't have it, we MUST fail.
+                        if cert_opt.is_none() {
+                            return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-seq PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
+                        }
+                        cert_opt
+                    } else {
+                        None
+                    };
 
                     if let Some(ref cert) = bound_cert {
                         self.highest_seq = self.highest_seq.max(cert.seq);
@@ -427,11 +441,11 @@ impl PbftState {
                     };
 
                     if !new_view_cert.verify(self.quorum_size, &self.public_keys) {
-                        return Err("NEW_VIEW_VERIFICATION_FAILED: NewViewCertificate cryptographic verification failed!");
+                        return Err("NEW_VIEW_VERIFICATION_FAILED: NewViewCertificate cryptographic verification failed! Bound certificate mismatch.");
                     }
 
                     self.new_view_certificates.insert(msg.view, new_view_cert);
-                    format!("🔄 [QUORUM-SOURCED BOUND NEW VIEW CERTIFICATE CREATED]: Quorum reached for View {}.", msg.view)
+                    format!("🔄 [STRICT QUORUM-SOURCED BOUND NEW VIEW CERTIFICATE]: Quorum reached for View {}. Inherited Seq: {}", msg.view, max_quorum_seq)
                 } else {
                     format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
