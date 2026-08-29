@@ -14,12 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 [SOVEREIGN LATTICE]: Initializing formally verified PBFT consensus engine...");
     println!("🔒 [CRYPTO ENGINE]: BLS12-381 Cryptography Booting...");
 
-    // 1. Production-grade cryptographic key generation using OS secure entropy (CSPRNG)
     let node_keypair = KeyPair::generate();
-    
-    // For deterministic testing/reproduction, use:
-    // let node_keypair = KeyPair::from_seed(b"NODE_0_SECURE_ENTROPY_SEED");
-
     let genesis_message = b"LATTICE_GENESIS_STATE";
     let signature = sign(genesis_message, &node_keypair.secret_key);
     
@@ -36,7 +31,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // 2. Initialize Node Public Key Registry for N = 4 (f = 1, Quorum = 3)
     let total_nodes = 4;
     let mut initial_pks = HashMap::new();
     for i in 0..total_nodes as u32 {
@@ -44,10 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_pks.insert(i, kp.public_key);
     }
 
-    let pbft_state = Arc::new(Mutex::new(PbftState::new(total_nodes, initial_pks)?));
+    let pbft_state = Arc::new(Mutex::new(PbftState::new(total_nodes, initial_pks).expect("Failed to initialize PBFT topology")));
     println!("⚙️  [CONSENSUS]: State Machine initialized for N={} (Quorum Size: {})", total_nodes, (2 * ((total_nodes - 1) / 3)) + 1);
 
-    // 3. Boot Network Transport Layer
     println!("📡 [NETWORK]: Booting asynchronous TCP transport daemon...");
     let server_handle = tokio::spawn(async move {
         if let Err(e) = start_tcp_listener("127.0.0.1:8080", pbft_state).await {
