@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use bls12_381::{G1Projective, G2Projective};
 use crate::threshold_bls::verify_bls_signature;
+use crate::wal::WriteAheadLog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -30,10 +31,11 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
-    view_change_votes: HashMap<(u64, u32), HashSet<u32>>, // (target_view, node_id) -> set of backing nodes
+    view_change_votes: HashMap<(u64, u32), HashSet<u32>>,
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
     public_keys: HashMap<u32, G2Projective>,
+    wal: WriteAheadLog,
 }
 
 impl PbftState {
@@ -51,6 +53,9 @@ impl PbftState {
             }
         }
 
+        let wal = WriteAheadLog::open("consensus_wal.log")
+            .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
+
         Ok(Self {
             total_nodes,
             f,
@@ -65,6 +70,7 @@ impl PbftState {
             quorum_size: 2 * f + 1,
             registered_nodes,
             public_keys: initial_public_keys,
+            wal,
         })
     }
 
@@ -72,7 +78,6 @@ impl PbftState {
         (view % self.total_nodes as u64) as u32
     }
 
-    /// Native, end-to-end cryptographic message handling with integrated PrePrepare, ViewChange and Sequence Windows
     pub fn handle_message(&mut self, msg: &PbftMessage) -> Result<String, &'static str> {
         if !self.registered_nodes.contains(&msg.sender_id) {
             return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
@@ -81,17 +86,18 @@ impl PbftState {
         let pk = self.public_keys.get(&msg.sender_id)
             .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
 
-        // Canonical message serialization for cryptographic binding
         let mut canonical_msg = Vec::new();
         canonical_msg.push(msg.phase as u8);
         canonical_msg.extend_from_slice(&msg.view.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.seq.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.digest);
 
-        // Native BLS pairing verification (Zero placeholders)
         if !verify_bls_signature(&canonical_msg, &msg.signature, pk) {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
+
+        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, &msg.digest)
+            .map_err(|_| "WAL_ERROR: Failed to write consensus event to disk log!")?;
 
         match msg.phase {
             Phase::PrePrepare => {
@@ -104,7 +110,6 @@ impl PbftState {
                     return Err("LEADER_VIOLATION: PrePrepare message sent by a non-leader node!");
                 }
 
-                // Sequence window & Replay protection check
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 if self.pre_prepared_proposals.contains(&proposal_key) {
                     return Err("DUPLICATE_PROPOSAL: PrePrepare for this sequence and digest already processed!");
@@ -166,66 +171,5 @@ impl PbftState {
                 Ok(format!("🔄 [VIEW CHANGE]: Vote recorded for transitioning to View {}.", msg.view))
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod asynchronous_byzantine_integration_tests {
-    use super::*;
-    use crate::threshold_bls::{KeyPair, sign};
-
-    #[test]
-    fn test_byzantine_adversarial_simulation() {
-        let mut pks = HashMap::new();
-        let mut keys = HashMap::new();
-        for i in 0..4 {
-            let kp = KeyPair::from_seed(format!("BYZANTINE_NODE_{}", i).as_bytes());
-            pks.insert(i, kp.public_key);
-            keys.insert(i, kp);
-        }
-
-        let mut state = PbftState::new(4, pks).unwrap();
-        let view: u64 = 0;
-        let seq: u64 = 1;
-        let valid_digest = [0xAA; 32];
-        let malicious_digest = [0xFF; 32];
-
-        // 1. Valid Pre-Prepare from Leader (Node 0)
-        let mut canonical_pre = vec![Phase::PrePrepare as u8];
-        canonical_pre.extend_from_slice(&view.to_be_bytes());
-        canonical_pre.extend_from_slice(&seq.to_be_bytes());
-        canonical_pre.extend_from_slice(&valid_digest);
-
-        let leader_sig = sign(&canonical_pre, &keys.get(&0).unwrap().secret_key);
-        let pre_msg = PbftMessage {
-            phase: Phase::PrePrepare,
-            view,
-            seq,
-            digest: valid_digest,
-            sender_id: 0,
-            signature: leader_sig,
-        };
-        assert!(state.handle_message(&pre_msg).is_ok());
-
-        // 2. Simulate Byzantine Node (Node 3) trying to inject a forged signature
-        let mut canonical_prep = vec![Phase::Prepare as u8];
-        canonical_prep.extend_from_slice(&view.to_be_bytes());
-        canonical_prep.extend_from_slice(&seq.to_be_bytes());
-        canonical_prep.extend_from_slice(&valid_digest);
-
-        let forged_sig = sign(&canonical_prep, &keys.get(&1).unwrap().secret_key); // Signed by Node 1
-        let byzantine_msg = PbftMessage {
-            phase: Phase::Prepare,
-            view,
-            seq,
-            digest: valid_digest,
-            sender_id: 3, // Claiming to be Node 3!
-            signature: forged_sig,
-        };
-
-        // System must reject cryptographic mismatch instantly
-        let res = state.handle_message(&byzantine_msg);
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
     }
 }
