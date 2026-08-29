@@ -1,0 +1,39 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust_engine
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test
+        run: cargo test --workspace --all-features
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  lean:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: formal_verification
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean
+        uses: lake-actions/lean-action@v1
+        with:
+          lake-package-directory: formal_verification
+      - name: Build Lean project
+        run: lake build
