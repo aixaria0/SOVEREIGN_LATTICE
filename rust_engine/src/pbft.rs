@@ -101,23 +101,21 @@ impl NewViewCertificate {
             return false;
         }
 
-        // Determine the highest sequence claimed by the Quorum
         let max_quorum_seq = self.view_change_votes.values().map(|&(s, _, _)| s).max().unwrap_or(0);
         let best_digest = self.view_change_votes.values()
             .find(|&&(s, _, _)| s == max_quorum_seq)
             .map(|&(_, d, _)| d)
             .unwrap_or([0u8; 32]);
 
-        // STRICT INVARIANT: The attached certificate must cryptographically match the quorum's highest claim.
+        // STRICT INVARIANT: Attached cert must cryptographically match the quorum's highest claim.
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
                 return false;
             }
             if cert.seq != max_quorum_seq || cert.digest != best_digest {
-                return false; // Safety Violation: Attached cert does not match quorum agreement!
+                return false;
             }
         } else {
-            // If no certificate is attached, the quorum MUST have legitimately claimed sequence 0.
             if max_quorum_seq > 0 {
                 return false; // Safety Violation: Quorum claimed a state, but evidence is missing!
             }
@@ -248,7 +246,7 @@ impl PbftState {
                             None
                         };
 
-                        // Strict WAL Replay: Only reconstruct NewView if we possess the legitimate quorum-sourced evidence
+                        // Strict WAL Replay: No Fallback
                         if max_quorum_seq == 0 || bound_cert.is_some() {
                             let nv_cert = NewViewCertificate {
                                 target_view: view,
@@ -421,7 +419,7 @@ impl PbftState {
                             .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
                             .cloned();
                         
-                        // Strict Invariant: No Fallback. If quorum claims a high-seq QC and we don't have it, we MUST fail.
+                        // Strict Invariant: No Fallback
                         if cert_opt.is_none() {
                             return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-seq PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
                         }
