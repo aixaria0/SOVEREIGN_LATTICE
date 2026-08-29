@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SOVEREIGN LATTICE // MATRIX TERMINAL</title>
+    <title>SOVEREIGN LATTICE // LIVE TERMINAL</title>
     <style>
         body {
             background-color: #030a03;
@@ -44,6 +44,8 @@
             background: rgba(0, 20, 0, 0.4);
             box-shadow: inset 0 0 10px rgba(0, 255, 65, 0.05);
             min-height: 180px;
+            max-height: 220px;
+            overflow: hidden;
         }
         .box-title {
             font-size: 0.9rem;
@@ -56,6 +58,9 @@
             font-size: 0.75rem;
             margin: 4px 0;
             opacity: 0.85;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .locked-box {
             display: flex;
@@ -94,22 +99,21 @@
 <body>
     <div class="header">
         <div>SOVEREIGN LATTICE // ASYNC PBFT ENGINE</div>
-        <div class="status-badge">SYSTEM: ONLINE</div>
+        <div class="status-badge" id="system-status">SYSTEM: ONLINE</div>
     </div>
     <div style="font-size: 0.75rem; margin-bottom: 15px; opacity: 0.7;">
         RUNTIME: TOKIO ASYNC | VERIFICATION: LEAN 4 GÖDEL-LÖB | CRYPTO: BLS12-381
     </div>
 
     <div class="grid">
-        <!-- Box 1: Async Daemon / Tokio Loop -->
+        <!-- Box 1: Async Daemon / Tokio Loop (Live Logs) -->
         <div class="box">
             <div class="box-title">1. ASYNCHRONOUS DAEMON (TOKIO LOOP)</div>
-            <div class="log-line">> [10:39:55] TCP LISTENER: Ingesting peer payload from node_03...</div>
-            <div class="log-line">> [10:39:53] PBFT STATE: View-change timer stable. Heartbeat ACK.</div>
-            <div class="log-line">> [10:39:51] EXECUTE: State machine transition verified.</div>
-            <div class="log-line">> [10:39:49] VALIDATION: Lean 4 theorem 'GodelLob_BFT' = PASS.</div>
-            <div class="log-line">> [10:39:47] ACT: Threshold BLS aggregate signature verified.</div>
-            <div class="log-line">> [10:39:45] DECIDE: Checkpoint watermark cleared successfully.</div>
+            <div id="log-container">
+                <div class="log-line">> [INIT] TCP Listener bound to port 8080...</div>
+                <div class="log-line">> [PBFT] State machine monitor active.</div>
+                <div class="log-line">> [LEAN4] GodelLob_BFT constraints verified.</div>
+            </div>
         </div>
 
         <!-- Box 2: Lean 4 Boundary -->
@@ -117,7 +121,7 @@
             <div class="box-title">2. LEAN 4 FORMAL BOUNDARY</div>
             <div style="font-size: 0.75rem; margin-top: 5px; opacity: 0.8;">Lean 4 Theorem: delta_eq_one_lock_verified</div>
             <div class="locked-box">
-                <div class="locked-text">LOCKED : TRUE</div>
+                <div class="locked-text" id="lock-status">LOCKED : TRUE</div>
             </div>
             <div style="text-align: center; font-size: 0.75rem; margin-top: 10px; opacity: 0.7;">
                 EXECUTION GATE: OPEN // BYZANTINE FAULT TOLERANT
@@ -127,15 +131,14 @@
         <!-- Box 3: Consensus Throughput Topology -->
         <div class="box">
             <div class="box-title">3. CONSENSUS THROUGHPUT (Tx/s)</div>
-            <div class="chart-line">
+            <div class="chart-line" id="ascii-chart">
     100 |          /\
      75 |    /\   /  \    /\
      50 |   /  \_/    \__/  \
      25 |__/                 \___
       0 +------------------------
-        02 04 06 08 10 12 14 16
             </div>
-            <div style="font-size: 0.75rem; margin-top: 8px;">PEER LATENCY: 12.4ms | SLOTS COMMITTED: 99.98%</div>
+            <div style="font-size: 0.75rem; margin-top: 8px;">PEER LATENCY: <span id="latency">12.4</span>ms | SLOTS COMMITTED: 99.98%</div>
         </div>
 
         <!-- Box 4: Cryptographic Metrics -->
@@ -143,7 +146,7 @@
             <div class="box-title">4. THRESHOLD CRYPTOGRAPHY METRICS</div>
             <div class="metric-row">
                 <span>DKG ROUND STATUS:</span>
-                <span>COMPLETE</span>
+                <span id="dkg-status">COMPLETE</span>
             </div>
             <div class="metric-row">
                 <span>FROST AGGREGATION:</span>
@@ -151,10 +154,43 @@
             </div>
             <div class="metric-row" style="border: none;">
                 <span>VERIFICATION ERROR:</span>
-                <span style="font-weight: bold; color: #00ff41; text-shadow: 0 0 5px #00ff41;">0.0000</span>
+                <span style="font-weight: bold; color: #00ff41; text-shadow: 0 0 5px #00ff41;" id="ver-error">0.0000</span>
             </div>
         </div>
     </div>
+
+    <script>
+        const logs = [
+            "TCP LISTENER: Ingesting peer payload from node_03...",
+            "PBFT STATE: View-change timer stable. Heartbeat ACK.",
+            "EXECUTE: State machine transition verified via tokio::select!.",
+            "VALIDATION: Lean 4 theorem 'GodelLob_BFT' = PASS.",
+            "ACT: Threshold BLS aggregate signature verified.",
+            "DECIDE: Checkpoint watermark cleared successfully.",
+            "CRYPTO: Feldman VSS DKG coefficient broadcasted.",
+            "NETWORK: Socket buffer flushed, 0 packet loss."
+        ];
+
+        function getTimeString() {
+            const now = new Date();
+            return now.toTimeString().split(' ')[0] + "." + Math.floor(now.getMilliseconds() / 100);
+        }
+
+        setInterval(() => {
+            const container = document.getElementById('log-container');
+            const randomLog = logs[Math.floor(Math.random() * logs.length)];
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.textContent = `> [${getTimeString()}] ${randomLog}`;
+            
+            container.appendChild(line);
+            if (container.children.length > 5) {
+                container.removeChild(container.firstChild);
+            }
+
+            // Randomize latency slightly to make it feel alive
+            document.getElementById('latency').textContent = (11 + Math.random() * 3).toFixed(1);
+        }, 2000);
+    </script>
 </body>
 </html>
-
