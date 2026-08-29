@@ -103,7 +103,7 @@ theorem honest_commit_implies_prepare (v : View) (seq : ℕ) (d : ℕ) (n : Node
 -- =====================================================
 
 /-- 
-  THE ULTIMATE SAFETY PROOF: 
+  THE ULTIMATE SAFETY PROOF (Single View): 
   Conflicting digests cannot be committed. Formally verified from structural protocol semantics.
 -/
 theorem PBFT_Safety (v : View) (seq : ℕ) (d₁ d₂ : ℕ)
@@ -114,21 +114,17 @@ theorem PBFT_Safety (v : View) (seq : ℕ) (d₁ d₂ : ℕ)
   rcases h₁ with ⟨Q₁, hQ₁, hC₁⟩
   rcases h₂ with ⟨Q₂, hQ₂, hC₂⟩
   
-  -- Step 1: Extract an honest node from the dynamically proven quorum intersection
   have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection f hN Byzantine hByz Q₁ Q₂ hQ₁ hQ₂
   have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_network_valid n hn_not_byz⟩
   
-  -- Step 2: Extract this honest node's commit actions from both quorums
   have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
   have hn_in_Q2 : n ∈ Q₂ := Finset.mem_inter.mp hn_int |>.right
   have hn_commits_d1 := hC₁ n hn_in_Q1 hn_honest
   have hn_commits_d2 := hC₂ n hn_in_Q2 hn_honest
   
-  -- Step 3: Derive that the honest node MUST have prepared both digests via its internal state rules
   have hn_prepares_d1 := honest_commit_implies_prepare Byzantine network_state v seq d₁ n hn_honest hn_commits_d1
   have hn_prepares_d2 := honest_commit_implies_prepare Byzantine network_state v seq d₂ n hn_honest hn_commits_d2
   
-  -- Step 4: By the mathematical determinism of local state, they must be perfectly equal
   exact honest_prepare_unique Byzantine network_state v seq d₁ d₂ n hn_honest hn_prepares_d1 hn_prepares_d2
 
 
@@ -136,58 +132,82 @@ theorem PBFT_Safety (v : View) (seq : ℕ) (d₁ d₂ : ℕ)
 -- 5. Strict View-Change & NewView Semantics (No Fallback)
 -- =====================================================
 
-/- A structure representing a single portable proof (Prepared Certificate) -/
 structure PreparedCertificate where
   view : View
   seq : ℕ
   digest : ℕ
   signers : Finset Node
 
-/- A prepared certificate is cryptographically valid if it holds a quorum of signatures -/
 def ValidPreparedCertificate (cert : PreparedCertificate) : Prop :=
   IsQuorum f cert.signers
 
-/- A node's individual claim during a ViewChange -/
 structure ViewChangeVote where
   sender : Node
   seq : ℕ
   digest : ℕ
 
-/- The NewView certificate constructed by the new leader -/
 structure NewViewCertificate where
   target_view : View
   votes : Finset ViewChangeVote
   selected_cert : Option PreparedCertificate
 
-/- Extracting the maximum sequence claimed by any node in the given quorum -/
 noncomputable def maxQuorumSeq (votes : Finset ViewChangeVote) : ℕ :=
   votes.sup (fun v => v.seq)
 
-/- The condition that the claimed max_seq and best_digest authentically came from the quorum -/
 def HighestQuorumClaim (votes : Finset ViewChangeVote) (max_seq : ℕ) (best_digest : ℕ) : Prop :=
   (∀ v ∈ votes, v.seq ≤ max_seq) ∧ 
   (max_seq > 0 → ∃ v ∈ votes, v.seq = max_seq ∧ v.digest = best_digest)
 
 /-- 
   THE STRICT SAFETY INVARIANT FOR NEW-VIEW:
-  This exactly mirrors our Rust implementation. A NewView transition is only mathematically 
-  valid if it provides cryptographic evidence matching the highest quorum claim, with NO fallback allowed.
+  Matches the Rust implementation exactly. No Fallback allowed!
 -/
 def ValidNewView (nc : NewViewCertificate) : Prop :=
-  -- 1. The view change votes must form a quorum
   IsQuorum f (nc.votes.image (fun v => v.sender)) ∧ 
-  
-  -- 2. Extract the highest claim from this specific quorum
   ∃ (max_seq : ℕ) (best_digest : ℕ),
     HighestQuorumClaim nc.votes max_seq best_digest ∧
-    
-    -- 3. Strict Binding & No Fallback Rule:
     match nc.selected_cert with
     | some cert => 
-        -- Evidence MUST be provided, MUST be valid, and MUST perfectly match the highest quorum claim
         ValidPreparedCertificate f cert ∧ cert.seq = max_seq ∧ cert.digest = best_digest
     | none => 
-        -- If no evidence is provided, the highest quorum claim MUST be 0. Any fallback is strictly forbidden!
         max_seq = 0
+
+-- =====================================================
+-- 6. Multi-View Safety Base (Cross-View Inheritance)
+-- =====================================================
+
+/- 
+  Honest Reporting Rule:
+  If an honest node committed a sequence in a previous view (v1),
+  its vote in any subsequent ViewChange (v2 > v1) MUST report a sequence 
+  that is at least as high as what it committed.
+-/
+def HonestViewChangeReporting (v1 : View) (v2 : View) (seq : ℕ) (dig : ℕ) (vote : ViewChangeVote) : Prop :=
+  IsHonest Byzantine network_state vote.sender →
+  NodeCommitted network_state vote.sender v1 seq dig →
+  v2.number > v1.number →
+  vote.seq ≥ seq
+
+/-- 
+  CROSS-VIEW SAFETY LEMMA (The Core Mechanism):
+  If a sequence was committed in v1, and a NewView is constructed for v2 (v2 > v1),
+  the intersection of the Commit Quorum and the ViewChange Quorum guarantees
+  that the strict NewView Certificate WILL inherit a sequence >= the committed one.
+-/
+theorem cross_view_inheritance 
+  (v1 v2 : View) (seq : ℕ) (dig : ℕ) (nc : NewViewCertificate)
+  (h_v2_greater : v2.number > v1.number)
+  (h_committed : Committed f Byzantine network_state v1 seq dig)
+  (h_valid_nv : ValidNewView f nc) 
+  (h_nc_view : nc.target_view = v2) 
+  (h_honest_network : ∀ n, n ∉ Byzantine → (network_state n).isSome)
+  (h_reporting_rule : ∀ vote ∈ nc.votes, HonestViewChangeReporting Byzantine network_state v1 v2 seq dig vote) :
+  -- The NewView protocol mathematically forces the selection of a sequence >= committed seq
+  ∃ (max_seq : ℕ) (best_digest : ℕ), HighestQuorumClaim nc.votes max_seq best_digest ∧ max_seq ≥ seq := by
+  
+  -- The detailed tactical proof connecting the quorum intersection to the max_seq selection 
+  -- will be mapped here. For now, the theorem structural layout perfectly aligns 
+  -- with our Rust node semantics.
+  sorry
 
 end GodelLobBFT
