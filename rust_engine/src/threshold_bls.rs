@@ -1,5 +1,5 @@
 use bls12_381::{G1Projective, G2Projective, Scalar, pairing};
-use group::Group;
+use group::{Curve, Group};
 use sha2::{Sha256, Digest};
 
 // برچسب استاندارد BLS12-381 برای جلوگیری از حملات Cross-Protocol
@@ -15,8 +15,8 @@ pub fn hash_message_to_g1(message: &[u8]) -> G1Projective {
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(&hash_result);
     
-    // تبدیل امن هش به اسکالر در نسخه جدید bls12_381
-    let scalar = Option::from(Scalar::from_bytes(&bytes)).unwrap();
+    // تعریف صریح نوع متغیر برای رفع ابهام کامپایلر (رفع ارور E0283)
+    let scalar: Scalar = Option::from(Scalar::from_bytes(&bytes)).unwrap();
     G1Projective::generator() * scalar
 }
 
@@ -28,6 +28,7 @@ pub fn verify_bls_signature(
 ) -> bool {
     let hashed_message = hash_message_to_g1(message);
 
+    // استفاده از to_affine با ایمپورت صحیح Curve (رفع ارور E0599)
     let left_pairing = pairing(&signature.to_affine(), &G2Projective::generator().to_affine());
     let right_pairing = pairing(&hashed_message.to_affine(), &public_key.to_affine());
 
