@@ -69,12 +69,11 @@ impl PbftState {
         let mut recovered_seq = 0;
         let mut recovered_proposals = HashSet::new();
         let mut recovered_prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>> = HashMap::new();
-        let mut recovered_commit_votes = HashMap::new();
+        let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>> = HashMap::new();
         let mut recovered_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
         let quorum_size = 2 * f + 1;
 
-        // Full State & Quorum Signer Reconstruction from WAL
         let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest| {
             if view > recovered_view { recovered_view = view; }
             if seq > recovered_seq { recovered_seq = seq; }
@@ -97,7 +96,7 @@ impl PbftState {
                 }
                 2 => { 
                     recovered_committed.insert((view, seq), digest); 
-                    let commit_v = recovered_commit_votes.entry((view, seq, digest)).or_default();
+                    let commit_v: &mut HashSet<u32> = recovered_commit_votes.entry((view, seq, digest)).or_default();
                     commit_v.insert(sender_id);
                 }
                 _ => {}
@@ -257,11 +256,9 @@ impl PbftState {
             }
         };
 
-        // 3. Durable WAL Append with explicit sender_id for precise post-crash signer recovery
         self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest)
             .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
 
         Ok(response)
     }
 }
-
