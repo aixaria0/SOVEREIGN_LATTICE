@@ -1,0 +1,14 @@
+[package]
+name = "sovereign_lattice_engine"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aria Fani"]
+
+[dependencies]
+# Cryptography & BLS dependencies for future expansion
+bls12_381 = "0.8"
+ff = "0.13"
+group = "0.13"
+rand = "0.8"
+sha2 = "0.10"
+curve25519-dalek = "4.1"
