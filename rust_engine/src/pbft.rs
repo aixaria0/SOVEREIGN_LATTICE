@@ -21,13 +21,40 @@ pub struct PbftMessage {
     pub signature: G1Projective,
 }
 
-/// Cryptographically Portable Quorum Certificate containing actual cryptographic signatures
+/// Fully Cryptographically Portable Quorum Certificate with real signatures
 #[derive(Clone)]
 pub struct PreparedCertificate {
     pub view: u64,
     pub seq: u64,
     pub digest: [u8; 32],
     pub signatures: HashMap<u32, G1Projective>,
+}
+
+impl PreparedCertificate {
+    /// Cryptographically verifies that the certificate contains at least `quorum_size` 
+    /// valid distinct signatures from the node registry.
+    pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
+        if self.signatures.len() < quorum_size {
+            return false;
+        }
+
+        let mut canonical_msg = Vec::new();
+        canonical_msg.push(Phase::Prepare as u8);
+        canonical_msg.extend_from_slice(&self.view.to_be_bytes());
+        canonical_msg.extend_from_slice(&self.seq.to_be_bytes());
+        canonical_msg.extend_from_slice(&self.digest);
+
+        let mut valid_count = 0;
+        for (&node_id, sig) in &self.signatures {
+            if let Some(pk) = public_keys.get(&node_id) {
+                if verify_bls_signature(&canonical_msg, sig, pk) {
+                    valid_count += 1;
+                }
+            }
+        }
+
+        valid_count >= quorum_size
+    }
 }
 
 pub struct PbftState {
@@ -74,7 +101,7 @@ impl PbftState {
         let mut recovered_committed = HashMap::new();
         let quorum_size = 2 * f + 1;
 
-        let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest| {
+        let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest, signature| {
             if view > recovered_view { recovered_view = view; }
             if seq > recovered_seq { recovered_seq = seq; }
             
@@ -84,15 +111,18 @@ impl PbftState {
                 }
                 1 => {
                     let sigs = recovered_prepare_votes.entry((view, seq, digest)).or_default();
-                    // Reconstruct with placeholder/recovered signature mapping
-                    sigs.insert(sender_id, G1Projective::identity());
+                    sigs.insert(sender_id, signature);
                     if sigs.len() >= quorum_size {
-                        recovered_certificates.insert((view, seq), PreparedCertificate {
+                        let cert = PreparedCertificate {
                             view,
                             seq,
                             digest,
                             signatures: sigs.clone(),
-                        });
+                        };
+                        // Validate recovered certificate cryptographically
+                        if cert.verify(quorum_size, &initial_public_keys) {
+                            recovered_certificates.insert((view, seq), cert);
+                        }
                     }
                 }
                 2 => { 
@@ -177,19 +207,24 @@ impl PbftState {
                         digest: msg.digest,
                         signatures: sigs.clone(),
                     };
+                    
+                    if !cert.verify(self.quorum_size, &self.public_keys) {
+                        return Err("CERTIFICATE_VERIFICATION_FAILED: Generated QC failed cryptographic signature verification!");
+                    }
+
                     self.prepared_certificates.insert((msg.view, msg.seq), cert);
-                    format!("✅ [PORTABLE PREPARED CERTIFICATE CREATED]: Quorum achieved with cryptographic signatures for View {} Seq {}.", msg.view, msg.seq)
+                    format!("✅ [VERIFIED PORTABLE CERTIFICATE CREATED]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq)
                 } else {
                     format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
                 }
             }
 
             Phase::Commit => {
-                let has_certificate = self.prepared_certificates.values()
-                    .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest);
+                let has_valid_certificate = self.prepared_certificates.values()
+                    .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys));
 
-                if !has_certificate {
-                    return Err("SAFETY_VIOLATION: Node cannot commit without a valid Portable Prepared Certificate!");
+                if !has_valid_certificate {
+                    return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Quorum Certificate!");
                 }
 
                 if let Some(existing_digest) = self.committed_digest.get(&(msg.view, msg.seq)) {
@@ -216,10 +251,10 @@ impl PbftState {
 
                 if msg.seq > 0 {
                     let has_valid_qc = self.prepared_certificates.values()
-                        .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.signatures.len() >= self.quorum_size);
+                        .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys));
 
                     if !has_valid_qc {
-                        return Err("CERTIFICATE_INVALID: ViewChange rejected; missing cryptographically portable Quorum Certificate!");
+                        return Err("CERTIFICATE_INVALID: ViewChange rejected; missing cryptographically verified Quorum Certificate!");
                     }
                 }
 
@@ -242,10 +277,10 @@ impl PbftState {
                     if max_seq > 0 {
                         self.highest_seq = self.highest_seq.max(max_seq);
                         
-                        // Collect signatures from supporters or fallback to identity
+                        // Gather verified signatures for the inherited certificate
                         let mut inherited_sigs = HashMap::new();
-                        for &supporter_id in supporters.keys() {
-                            inherited_sigs.insert(supporter_id, G1Projective::identity());
+                        if let Some(existing_cert) = self.prepared_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest) {
+                            inherited_sigs = existing_cert.signatures.clone();
                         }
 
                         let verified_cert = PreparedCertificate {
@@ -254,19 +289,23 @@ impl PbftState {
                             digest: best_digest,
                             signatures: inherited_sigs,
                         };
-                        self.prepared_certificates.insert((msg.view, max_seq), verified_cert);
+
+                        if verified_cert.verify(self.quorum_size, &self.public_keys) {
+                            self.prepared_certificates.insert((msg.view, max_seq), verified_cert);
+                        }
                     }
 
-                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached with Portable Certificates. Advanced to View {}. Inherited Seq: {}", msg.view, max_seq)
+                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached with Cryptographically Verified Certificates. Advanced to View {}.", msg.view)
                 } else {
-                    format!("🔄 [VIEW CHANGE VOTE]: Recorded with Portable QC for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
+                    format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
             }
         };
 
-        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest)
+        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
             .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
 
         Ok(response)
     }
 }
+
