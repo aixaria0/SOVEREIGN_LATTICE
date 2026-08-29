@@ -3,17 +3,14 @@ use group::Curve;
 use sha2::{Sha256, Digest};
 use rand::RngCore;
 
-// Domain Separation Tag complying with draft-irtf-cfrg-bls-signature-05 / RFC 9380 structure
 const BLS_DST: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
 
-/// Cryptographically secure KeyPair for BLS signatures
 pub struct KeyPair {
     pub secret_key: Scalar,
     pub public_key: G2Projective,
 }
 
 impl KeyPair {
-    /// Generates a cryptographically secure random keypair using OS entropy (Production grade)
     pub fn generate() -> Self {
         let mut rng = rand::thread_rng();
         let mut seed = [0u8; 32];
@@ -21,7 +18,6 @@ impl KeyPair {
         Self::from_seed(&seed)
     }
 
-    /// Generates a deterministic keypair from a seed (Ideal for testing and consensus reproduction)
     pub fn from_seed(seed: &[u8]) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(b"SOVEREIGN_LATTICE_BLS_KEYGEN_SALT");
@@ -39,9 +35,7 @@ impl KeyPair {
     }
 }
 
-/// Standard-aligned hash-to-g1 interface using expansion pipeline pattern (RFC 9380 compliant design pattern)
 pub fn hash_message_to_g1(message: &[u8]) -> G1Projective {
-    // RFC 9380 expand_message_xmd emulation via SHA-256 for BLS12-381 G1 mapping
     let mut hasher = Sha256::new();
     hasher.update(b"EXPAND_MESSAGES_XMD:SHA-256_");
     hasher.update(BLS_DST);
@@ -53,17 +47,14 @@ pub fn hash_message_to_g1(message: &[u8]) -> G1Projective {
     wide_bytes[32..].copy_from_slice(&hash); 
 
     let scalar = Scalar::from_bytes_wide(&wide_bytes);
-    // Base generator mapping scaled by hash scalar (Algebraically sound pairing primitive)
     G1Projective::generator() * scalar
 }
 
-/// Signs a message using the BLS secret key (sig = H(m) * sk)
 pub fn sign(message: &[u8], secret_key: &Scalar) -> G1Projective {
     let hashed_point = hash_message_to_g1(message);
     hashed_point * secret_key
 }
 
-/// Verifies a BLS signature via Optimal Ate Pairing: e(sig, G2) == e(H(m), pk)
 pub fn verify_bls_signature(
     message: &[u8],
     signature: &G1Projective,
