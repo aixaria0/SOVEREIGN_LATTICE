@@ -1,3 +1,11 @@
+// src/main.rs
+
+pub mod schnorr_proof;
+pub mod feldman_dkg;
+pub mod frost_sim;
+pub mod threshold_bls;
+pub mod network;
+
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time;
@@ -93,7 +101,7 @@ impl PBFTMonitorState {
         }
     }
 
-    /// The beating heart of the daemon running in the background
+    /// The background daemon managing the event loop and timeouts
     pub async fn run_daemon(&mut self, mut rx: mpsc::Receiver<MonitorEvent>) {
         println!("🚀 [DAEMON] PBFT Async Engine Started...");
         let mut interval = time::interval(Duration::from_millis(500));
@@ -112,38 +120,32 @@ impl PBFTMonitorState {
 }
 
 // ==========================================
-// 🌐 ASYNC TEST SUITE
+// 🌐 ASYNC ENTRY POINT & NETWORK SPAWNER
 // ==========================================
 #[tokio::main]
 async fn main() {
     println!("========================================");
-    println!(" 🌐 SOVEREIGN LATTICE (TOKIO ASYNC MODE) ");
+    println!(" 🌐 SOVEREIGN LATTICE (NETWORK DAEMON) ");
     println!("========================================\n");
     
     let (tx, rx) = mpsc::channel(100);
     let mut engine = PBFTMonitorState::new(1, 2);
     
+    // Spawn the core consensus engine daemon in the background
     tokio::spawn(async move {
         engine.run_daemon(rx).await;
     });
 
-    time::sleep(Duration::from_millis(500)).await;
-    
-    println!("[*] Sending Valid Commit...");
-    let valid_sig = AggregateSignature { is_valid: true };
-    tx.send(MonitorEvent::Commit { seq: 1, digest: 1042, sig: valid_sig }).await.unwrap();
+    // Spawn the real TCP network layer on local port 8080
+    let tx_net = tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = network::start_tcp_listener("127.0.0.1:8080", tx_net).await {
+            eprintln!("Network listener failed: {}", e);
+        }
+    });
 
-    println!("\n[*] Simulating network delay to trigger timeout...");
-    time::sleep(Duration::from_secs(3)).await;
-
-    println!("\n[*] Sending New View transaction to recover network...");
-    let new_view_sig = AggregateSignature { is_valid: true };
-    tx.send(MonitorEvent::NewView { 
-        view: View { number: 1, leader: 2 }, 
-        sig: new_view_sig 
-    }).await.unwrap();
-
-    time::sleep(Duration::from_millis(500)).await;
-    println!("\n[*] Async Test Complete! Network survived.");
+    // Keep the main process alive to listen for incoming connections
+    loop {
+        time::sleep(Duration::from_secs(3600)).await;
+    }
 }
-
