@@ -16,7 +16,6 @@ impl WriteAheadLog {
         Ok(Self { file })
     }
 
-    /// Appends a consensus state transition entry to disk log, including sender_id for cryptographic quorum recovery
     pub fn append_entry(&mut self, view: u64, seq: u64, phase_u8: u8, sender_id: u32, digest: &[u8; 32]) -> std::io::Result<()> {
         self.file.write_all(&view.to_be_bytes())?;
         self.file.write_all(&seq.to_be_bytes())?;
@@ -27,7 +26,6 @@ impl WriteAheadLog {
         Ok(())
     }
 
-    /// Replays the log to restore complete state and signer sets upon node recovery
     pub fn replay_log<F>(&mut self, mut callback: F) -> std::io::Result<()> 
     where
         F: FnMut(u64, u64, u8, u32, [u8; 32])
@@ -37,7 +35,6 @@ impl WriteAheadLog {
         self.file.read_to_end(&mut buf)?;
 
         let mut cursor = 0;
-        // 8 (view) + 8 (seq) + 1 (phase) + 4 (sender_id) + 32 (digest) = 53 bytes per entry
         while cursor + 53 <= buf.len() {
             let view = u64::from_be_bytes(buf[cursor..cursor+8].try_into().unwrap());
             let seq = u64::from_be_bytes(buf[cursor+8..cursor+16].try_into().unwrap());
