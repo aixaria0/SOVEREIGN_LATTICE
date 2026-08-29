@@ -9,7 +9,6 @@ pub enum Phase {
     Commit,
 }
 
-/// Encapsulated network message with cryptographic signature binding (Addressing reviewer's #1 question)
 pub struct PbftMessage {
     pub phase: Phase,
     pub view: u64,
@@ -65,18 +64,15 @@ impl PbftState {
         })
     }
 
-    /// Primary Leader derivation rule: Leader = view % N
     pub fn get_expected_leader(&self, view: u64) -> u32 {
         (view % self.total_nodes as u64) as u32
     }
 
     pub fn handle_message(&mut self, msg: &PbftMessage) -> Result<String, &'static str> {
-        // 1. Identity & Registry Check
         if !self.registered_nodes.contains(&msg.sender_id) {
             return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
         }
 
-        // 2. Cryptographic Verification using real BLS pairing check
         let pk = self.public_keys.get(&msg.sender_id)
             .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
 
@@ -94,10 +90,8 @@ impl PbftState {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
 
-        // 3. Phase-specific rigorous processing
         match msg.phase {
             Phase::PrePrepare => {
-                // Addressing reviewer's #2 question: Full PrePrepare & Leader validation
                 if msg.view != self.current_view {
                     return Err("VIEW_MISMATCH: PrePrepare view does not match current consensus view!");
                 }
@@ -176,16 +170,15 @@ mod comprehensive_integration_tests {
         }
 
         let mut state = PbftState::new(4, pks).unwrap();
-        let view = 0; // Leader is Node 0 (0 % 4 = 0)
-        let seq = 1;
+        let view: u64 = 0; 
+        let seq: u64 = 1;
         let digest = [0x77; 32];
 
-        let mut canonical = vec![0]; // PrePrepare phase marker
+        let mut canonical = vec![0]; 
         canonical.extend_from_slice(&view.to_be_bytes());
         canonical.extend_from_slice(&seq.to_be_bytes());
         canonical.extend_from_slice(&digest);
 
-        // Signed by actual leader (Node 0)
         let leader_sig = sign(&canonical, &keys.get(&0).unwrap().secret_key);
         let msg = PbftMessage {
             phase: Phase::PrePrepare,
@@ -198,7 +191,6 @@ mod comprehensive_integration_tests {
 
         assert!(state.handle_message(&msg).is_ok());
 
-        // Attempt by non-leader (Node 1) to send PrePrepare should fail
         let non_leader_sig = sign(&canonical, &keys.get(&1).unwrap().secret_key);
         let invalid_msg = PbftMessage {
             sender_id: 1,
