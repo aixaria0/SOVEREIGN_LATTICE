@@ -87,7 +87,6 @@ impl CommitCertificate {
     }
 }
 
-/// Fully Bound & Cryptographically Verified NewView Certificate
 #[derive(Clone)]
 pub struct NewViewCertificate {
     pub target_view: u64,
@@ -101,14 +100,12 @@ impl NewViewCertificate {
             return false;
         }
 
-        // 1. Verify bound prepared certificate if present
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
                 return false;
             }
         }
 
-        // 2. Verify ViewChange signatures
         let mut canonical_msg = Vec::new();
         canonical_msg.push(Phase::ViewChange as u8);
         canonical_msg.extend_from_slice(&self.target_view.to_be_bytes());
@@ -153,6 +150,7 @@ impl PbftState {
         }
 
         let mut registered_nodes = HashSet::new();
+        let quorum_size = 2 * f + 1;
         for id in 0..total_nodes as u32 {
             registered_nodes.insert(id);
             if !initial_public_keys.contains_key(&id) {
@@ -173,7 +171,6 @@ impl PbftState {
         let mut recovered_commit_certificates = HashMap::new();
         let mut recovered_new_view_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
-        let quorum_size = 2 * f + 1;
 
         let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest, signature| {
             if view > recovered_view { recovered_view = view; }
@@ -219,16 +216,15 @@ impl PbftState {
                     supporters.insert(sender_id, (seq, digest, signature));
                     if supporters.len() >= quorum_size {
                         let mut vc_sigs = HashMap::new();
-                        let mut max_seq = 0;
-                        let mut best_digest = [0u8; 32];
-                        for (&sid, &(s, d, sig)) in supporters.iter() {
+                        for (&sid, &(_, _, sig)) in supporters.iter() {
                             vc_sigs.insert(sid, sig);
-                            if s > max_seq {
-                                max_seq = s;
-                                best_digest = d;
-                            }
                         }
-                        let bound_cert = recovered_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest).cloned();
+                        // Deterministic selection of highest valid prepared certificate
+                        let bound_cert = recovered_certificates.values()
+                            .filter(|c| c.verify(quorum_size, &initial_public_keys))
+                            .max_by_key(|c| c.seq)
+                            .cloned();
+
                         let nv_cert = NewViewCertificate {
                             target_view: view,
                             view_change_signatures: vc_sigs,
@@ -388,23 +384,20 @@ impl PbftState {
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
                     
-                    let mut max_seq = 0;
-                    let mut best_digest = [0u8; 32];
                     let mut view_change_sigs = HashMap::new();
-                    
-                    for (&supporter_id, &(seq, digest, sig)) in supporters.iter() {
+                    for (&supporter_id, &(_, _, sig)) in supporters.iter() {
                         view_change_sigs.insert(supporter_id, sig);
-                        if seq > max_seq {
-                            max_seq = seq;
-                            best_digest = digest;
-                        }
                     }
                     
-                    if max_seq > 0 {
-                        self.highest_seq = self.highest_seq.max(max_seq);
-                    }
+                    // Deterministic selection of highest valid prepared certificate
+                    let bound_cert = self.prepared_certificates.values()
+                        .filter(|c| c.verify(self.quorum_size, &self.public_keys))
+                        .max_by_key(|c| c.seq)
+                        .cloned();
 
-                    let bound_cert = self.prepared_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest).cloned();
+                    if let Some(ref cert) = bound_cert {
+                        self.highest_seq = self.highest_seq.max(cert.seq);
+                    }
 
                     let new_view_cert = NewViewCertificate {
                         target_view: msg.view,
@@ -417,7 +410,7 @@ impl PbftState {
                     }
 
                     self.new_view_certificates.insert(msg.view, new_view_cert);
-                    format!("🔄 [BOUND NEW VIEW CERTIFICATE CREATED]: Quorum reached for View {}.", msg.view)
+                    format!("🔄 [DETERMINISTIC BOUND NEW VIEW CERTIFICATE CREATED]: Quorum reached for View {}.", msg.view)
                 } else {
                     format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
