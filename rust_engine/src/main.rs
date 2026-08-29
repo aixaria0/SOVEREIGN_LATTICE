@@ -9,9 +9,9 @@ use crate::threshold_bls::verify_bls_signature;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 [SOVEREIGN LATTICE]: Initializing formally verified PBFT consensus engine...");
     
-    // اجرای سیم‌کشی واقعی: بررسی زنده امضاها به جای استفاده از Mock
     println!("🔒 [CRYPTO ENGINE]: BLS12-381 Threshold Cryptography Active (RFC 9380 compliant)");
     
+    // Internal sanity check for the cryptographic core before network boot
     let genesis_message = b"LATTICE_GENESIS_STATE";
     let dummy_sig = G1Projective::identity(); 
     let genesis_pk = G2Projective::generator();
