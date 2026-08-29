@@ -47,4 +47,3 @@ impl WriteAheadLog {
         Ok(())
     }
 }
-
