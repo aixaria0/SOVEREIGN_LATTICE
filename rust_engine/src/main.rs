@@ -2,7 +2,6 @@ mod network;
 mod threshold_bls;
 
 use bls12_381::{G1Projective, G2Projective};
-use group::Group;
 use crate::network::start_tcp_listener;
 use crate::threshold_bls::verify_bls_signature;
 
@@ -15,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // یک تست داخلی برای تایید سلامت موتور رمزنگاری پیش از لود شدن شبکه
     let genesis_message = b"LATTICE_GENESIS_STATE";
-    let dummy_sig = G1Projective::identity(); // در محیط واقعی این امضا از پکت شبکه استخراج می‌شود
+    let dummy_sig = G1Projective::identity(); 
     let genesis_pk = G2Projective::generator();
     
     let is_secure = verify_bls_signature(genesis_message, &dummy_sig, &genesis_pk);
