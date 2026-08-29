@@ -1,10 +1,10 @@
 // src/main.rs
 
-// Uncomment these lines once the respective files are fully debugged 
-// to make their modules available across the project:
-// mod schnorr_proof;
-// mod feldman_dkg;
-// mod frost_sim;
+// Exposing the cryptographic and consensus modules to the main engine
+pub mod schnorr_proof;
+pub mod feldman_dkg;
+pub mod frost_sim;
+pub mod threshold_bls;
 
 use std::time::{Duration, Instant};
 
