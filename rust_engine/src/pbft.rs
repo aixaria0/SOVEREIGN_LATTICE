@@ -40,7 +40,6 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
-    // Target View -> Sender ID -> (seq, digest)
     view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32])>>, 
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
@@ -66,17 +65,17 @@ impl PbftState {
         let mut wal = WriteAheadLog::open("consensus_wal.log")
             .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
 
-        // Full State & Vote Reconstruction from WAL
         let mut recovered_view = 0;
         let mut recovered_seq = 0;
         let mut recovered_proposals = HashSet::new();
-        let mut recovered_prepare_votes = HashMap::new();
+        let mut recovered_prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>> = HashMap::new();
         let mut recovered_commit_votes = HashMap::new();
         let mut recovered_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
         let quorum_size = 2 * f + 1;
 
-        let _ = wal.replay_log(|view, seq, phase_u8, digest| {
+        // Full State & Quorum Signer Reconstruction from WAL
+        let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest| {
             if view > recovered_view { recovered_view = view; }
             if seq > recovered_seq { recovered_seq = seq; }
             
@@ -85,11 +84,8 @@ impl PbftState {
                     recovered_proposals.insert((view, seq, digest)); 
                 }
                 1 => {
-                    // Replay prepare vote tracking and dynamically rebuild certificates if quorum met
-                    let votes = recovered_prepare_votes.entry((view, seq, digest)).or_insert_with(HashSet::new);
-                    // For WAL replay, simulate node tracking or capture signers if encoded. 
-                    // Here we ensure state tracking continuity.
-                    votes.insert(0); // placeholder or historical tracker
+                    let votes = recovered_prepare_votes.entry((view, seq, digest)).or_default();
+                    votes.insert(sender_id);
                     if votes.len() >= quorum_size {
                         recovered_certificates.insert((view, seq), PreparedCertificate {
                             view,
@@ -101,6 +97,8 @@ impl PbftState {
                 }
                 2 => { 
                     recovered_committed.insert((view, seq), digest); 
+                    let commit_v = recovered_commit_votes.entry((view, seq, digest)).or_default();
+                    commit_v.insert(sender_id);
                 }
                 _ => {}
             }
@@ -142,12 +140,10 @@ impl PbftState {
         canonical_msg.extend_from_slice(&msg.seq.to_be_bytes());
         canonical_msg.extend_from_slice(&msg.digest);
 
-        // 1. Cryptographic Authentication
         if !verify_bls_signature(&canonical_msg, &msg.signature, pk) {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
 
-        // 2. Logical State Transitions & Validation
         let response = match msg.phase {
             Phase::PrePrepare => {
                 if msg.view != self.current_view {
@@ -175,7 +171,6 @@ impl PbftState {
                 votes.insert(msg.sender_id);
 
                 if votes.len() >= self.quorum_size {
-                    // Create and store a First-Class Prepared Certificate backed by quorum signers
                     let cert = PreparedCertificate {
                         view: msg.view,
                         seq: msg.seq,
@@ -219,7 +214,6 @@ impl PbftState {
                     return Err("VIEW_CHANGE_INVALID: Target view must be greater than current view!");
                 }
 
-                // Strict Quorum Certificate Validation for ViewChange
                 if msg.seq > 0 {
                     let has_valid_qc = self.prepared_certificates.values()
                         .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.signers.len() >= self.quorum_size);
@@ -263,10 +257,11 @@ impl PbftState {
             }
         };
 
-        // 3. Durable WAL Append ONLY after validation
-        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, &msg.digest)
+        // 3. Durable WAL Append with explicit sender_id for precise post-crash signer recovery
+        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest)
             .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
 
         Ok(response)
     }
 }
+
