@@ -131,4 +131,63 @@ theorem PBFT_Safety (v : View) (seq : ℕ) (d₁ d₂ : ℕ)
   -- Step 4: By the mathematical determinism of local state, they must be perfectly equal
   exact honest_prepare_unique Byzantine network_state v seq d₁ d₂ n hn_honest hn_prepares_d1 hn_prepares_d2
 
+
+-- =====================================================
+-- 5. Strict View-Change & NewView Semantics (No Fallback)
+-- =====================================================
+
+/- A structure representing a single portable proof (Prepared Certificate) -/
+structure PreparedCertificate where
+  view : View
+  seq : ℕ
+  digest : ℕ
+  signers : Finset Node
+
+/- A prepared certificate is cryptographically valid if it holds a quorum of signatures -/
+def ValidPreparedCertificate (cert : PreparedCertificate) : Prop :=
+  IsQuorum f cert.signers
+
+/- A node's individual claim during a ViewChange -/
+structure ViewChangeVote where
+  sender : Node
+  seq : ℕ
+  digest : ℕ
+
+/- The NewView certificate constructed by the new leader -/
+structure NewViewCertificate where
+  target_view : View
+  votes : Finset ViewChangeVote
+  selected_cert : Option PreparedCertificate
+
+/- Extracting the maximum sequence claimed by any node in the given quorum -/
+noncomputable def maxQuorumSeq (votes : Finset ViewChangeVote) : ℕ :=
+  votes.sup (fun v => v.seq)
+
+/- The condition that the claimed max_seq and best_digest authentically came from the quorum -/
+def HighestQuorumClaim (votes : Finset ViewChangeVote) (max_seq : ℕ) (best_digest : ℕ) : Prop :=
+  (∀ v ∈ votes, v.seq ≤ max_seq) ∧ 
+  (max_seq > 0 → ∃ v ∈ votes, v.seq = max_seq ∧ v.digest = best_digest)
+
+/-- 
+  THE STRICT SAFETY INVARIANT FOR NEW-VIEW:
+  This exactly mirrors our Rust implementation. A NewView transition is only mathematically 
+  valid if it provides cryptographic evidence matching the highest quorum claim, with NO fallback allowed.
+-/
+def ValidNewView (nc : NewViewCertificate) : Prop :=
+  -- 1. The view change votes must form a quorum
+  IsQuorum f (nc.votes.image (fun v => v.sender)) ∧ 
+  
+  -- 2. Extract the highest claim from this specific quorum
+  ∃ (max_seq : ℕ) (best_digest : ℕ),
+    HighestQuorumClaim nc.votes max_seq best_digest ∧
+    
+    -- 3. Strict Binding & No Fallback Rule:
+    match nc.selected_cert with
+    | some cert => 
+        -- Evidence MUST be provided, MUST be valid, and MUST perfectly match the highest quorum claim
+        ValidPreparedCertificate f cert ∧ cert.seq = max_seq ∧ cert.digest = best_digest
+    | none => 
+        -- If no evidence is provided, the highest quorum claim MUST be 0. Any fallback is strictly forbidden!
+        max_seq = 0
+
 end GodelLobBFT
