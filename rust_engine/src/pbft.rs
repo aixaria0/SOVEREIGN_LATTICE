@@ -31,7 +31,7 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
-    // Target View -> Sender ID -> (Latest Prepared Seq, Digest)
+    // Target View -> Sender ID -> Certified Prepared Certificate (seq, digest)
     view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32])>>, 
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
@@ -57,12 +57,23 @@ impl PbftState {
         let mut wal = WriteAheadLog::open("consensus_wal.log")
             .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
 
-        // State Recovery Mechanism from WAL
+        // Full State Reconstruction Recovery Mechanism from WAL
         let mut recovered_view = 0;
         let mut recovered_seq = 0;
-        let _ = wal.replay_log(|view, seq, _phase, _digest| {
+        let mut recovered_prepared = HashMap::new();
+        let mut recovered_committed = HashMap::new();
+        let mut recovered_proposals = HashSet::new();
+
+        let _ = wal.replay_log(|view, seq, phase_u8, digest| {
             if view > recovered_view { recovered_view = view; }
             if seq > recovered_seq { recovered_seq = seq; }
+            
+            match phase_u8 {
+                0 => { recovered_proposals.insert((view, seq, digest)); }
+                1 => { recovered_prepared.insert((view, seq), digest); }
+                2 => { recovered_committed.insert((view, seq), digest); }
+                _ => {}
+            }
         });
 
         Ok(Self {
@@ -70,9 +81,9 @@ impl PbftState {
             f,
             current_view: recovered_view,
             highest_seq: recovered_seq,
-            prepared_digest: HashMap::new(),
-            committed_digest: HashMap::new(),
-            pre_prepared_proposals: HashSet::new(),
+            prepared_digest: recovered_prepared,
+            committed_digest: recovered_committed,
+            pre_prepared_proposals: recovered_proposals,
             prepare_votes: HashMap::new(),
             commit_votes: HashMap::new(),
             view_change_votes: HashMap::new(),
@@ -173,14 +184,17 @@ impl PbftState {
                     return Err("VIEW_CHANGE_INVALID: Target view must be greater than current view!");
                 }
 
+                // Certificate Validation: Ensure the claimed state was previously prepared locally or validly backed
+                if msg.seq > 0 && !self.prepared_digest.values().any(|d| d == &msg.digest) {
+                    return Err("CERTIFICATE_INVALID: ViewChange carries an unverified/unprepared state claim!");
+                }
+
                 let supporters = self.view_change_votes.entry(msg.view).or_default();
-                // Store the piggybacked prepared certificate (sequence and digest)
                 supporters.insert(msg.sender_id, (msg.seq, msg.digest));
 
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
                     
-                    // NewView Semantics: Extract highest prepared state from the quorum
                     let mut max_seq = 0;
                     let mut best_digest = [0u8; 32];
                     
@@ -196,9 +210,9 @@ impl PbftState {
                         self.prepared_digest.insert((msg.view, max_seq), best_digest);
                     }
 
-                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached. Advanced to View {}. Inherited valid Seq: {}", msg.view, max_seq)
+                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached with valid Certificates. Advanced to View {}. Inherited Seq: {}", msg.view, max_seq)
                 } else {
-                    format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
+                    format!("🔄 [VIEW CHANGE VOTE]: Recorded with Certificate for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
             }
         };
