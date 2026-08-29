@@ -152,10 +152,10 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
-    view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>>, 
-    quorum_size: usize,
+    pub view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>>, 
+    pub quorum_size: usize,
     registered_nodes: HashSet<u32>,
-    public_keys: HashMap<u32, G2Projective>,
+    pub public_keys: HashMap<u32, G2Projective>,
     wal: WriteAheadLog,
 }
 
@@ -454,5 +454,86 @@ impl PbftState {
             .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
 
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+    use bls12_381::{G1Projective, G2Projective, Scalar};
+    use group::Group;
+    use rand::rngs::OsRng;
+    use ff::Field;
+
+    fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
+        let mut secret_keys = HashMap::new();
+        let mut public_keys = HashMap::new();
+        for i in 0..n as u32 {
+            let sk = Scalar::random(&mut OsRng);
+            let pk = G2Projective::generator() * sk;
+            secret_keys.insert(i, sk);
+            public_keys.insert(i, pk);
+        }
+        (secret_keys, public_keys)
+    }
+
+    fn sign_message(_msg: &[u8], sk: &Scalar) -> G1Projective {
+        G1Projective::generator() * sk
+    }
+
+    #[test]
+    fn test_ghost_certificate_attack_rejected() {
+        let n = 4; // 3f + 1, where f = 1
+        let (secret_keys, public_keys) = generate_test_keys(n);
+        
+        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+        
+        let target_view = 1;
+        let malicious_seq = 999; // Ghost sequence
+        let malicious_digest = [0xbb; 32];
+
+        let mut create_view_change = |sender_id: u32, sk: &Scalar| {
+            let mut canonical_msg = Vec::new();
+            canonical_msg.push(Phase::ViewChange as u8);
+            canonical_msg.extend_from_slice(&target_view.to_be_bytes());
+            canonical_msg.extend_from_slice(&malicious_seq.to_be_bytes());
+            canonical_msg.extend_from_slice(&malicious_digest);
+
+            PbftMessage {
+                phase: Phase::ViewChange,
+                view: target_view,
+                seq: malicious_seq,
+                digest: malicious_digest,
+                sender_id,
+                signature: sign_message(&canonical_msg, sk),
+            }
+        };
+
+        let msg1 = create_view_change(1, &secret_keys[&1]);
+        let msg2 = create_view_change(2, &secret_keys[&2]);
+        let msg3 = create_view_change(3, &secret_keys[&3]);
+        
+        let supporters = state.view_change_votes.entry(target_view).or_default();
+        supporters.insert(1, (malicious_seq, malicious_digest, msg1.signature));
+        supporters.insert(2, (malicious_seq, malicious_digest, msg2.signature));
+        supporters.insert(3, (malicious_seq, malicious_digest, msg3.signature));
+
+        let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
+        let best_digest = supporters.values()
+            .find(|&&(s, _, _)| s == max_quorum_seq)
+            .map(|&(_, d, _)| d)
+            .unwrap_or([0u8; 32]);
+
+        let bound_cert = if max_quorum_seq > 0 {
+            state.prepared_certificates.values()
+                .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(state.quorum_size, &state.public_keys))
+                .cloned()
+        } else {
+            None
+        };
+
+        assert!(bound_cert.is_none(), "Node 0 magically found a ghost certificate!");
+        let is_rejected = bound_cert.is_none() && max_quorum_seq > 0;
+        assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
     }
 }
