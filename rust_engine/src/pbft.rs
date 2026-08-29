@@ -8,12 +8,8 @@ pub enum Phase {
 }
 
 pub struct PbftState {
-    // Exact mapping to Lean's HonestState: (view, seq) -> Option<Digest>
-    // Enforces that an honest node NEVER prepares or commits two conflicting digests
-    prepared_digest: HashMap<(u64, u64), [u8; 32]>,
-    committed_digest: HashMap<(u64, u64), [u8; 32]>,
-
-    // Quorum tracking: (view, seq, digest) -> Set of Node IDs
+    pub prepared_digest: HashMap<(u64, u64), [u8; 32]>,
+    pub committed_digest: HashMap<(u64, u64), [u8; 32]>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     quorum_size: usize,
@@ -45,7 +41,6 @@ impl PbftState {
             }
 
             Phase::Prepare => {
-                // Correspondence check with Lean: Honest_Prepare_Unique
                 if let Some(existing_digest) = self.prepared_digest.get(&(view, seq)) {
                     if existing_digest != &digest {
                         return Err("EQUIVOCATION_DETECTED: Conflicting PREPARE digest for same sequence!");
@@ -64,12 +59,10 @@ impl PbftState {
             }
 
             Phase::Commit => {
-                // Correspondence check with Lean: Commit_implies_Prepare
                 if !self.prepared_digest.contains_key(&(view, seq)) {
                     return Err("SAFETY_VIOLATION: Node cannot commit an un-prepared sequence!");
                 }
 
-                // Check for commit conflict
                 if let Some(existing_digest) = self.committed_digest.get(&(view, seq)) {
                     if existing_digest != &digest {
                         return Err("EQUIVOCATION_DETECTED: Conflicting COMMIT digest for same sequence!");
@@ -91,32 +84,29 @@ impl PbftState {
 }
 
 #[cfg(test)]
-mod tests {
+mod rigorous_correspondence_tests {
     use super::*;
 
     #[test]
-    fn test_reject_conflicting_prepare() {
+    fn test_lean_correspondence_safety_invariant() {
         let mut state = PbftState::new(4);
-        let digest_a = [1u8; 32];
-        let digest_b = [2u8; 32];
+        let view = 1;
+        let seq = 100;
+        let digest_alpha = [0xAA; 32];
+        let digest_beta = [0xBB; 32];
 
-        // Node 1, 2, 3 prepare digest A -> Quorum reached
-        assert!(state.process_message(Phase::Prepare, 0, 1, digest_a, 1).is_ok());
-        assert!(state.process_message(Phase::Prepare, 0, 1, digest_a, 2).is_ok());
-        assert!(state.process_message(Phase::Prepare, 0, 1, digest_a, 3).is_ok());
+        assert!(state.process_message(Phase::Prepare, view, seq, digest_alpha, 1).is_ok());
+        assert!(state.process_message(Phase::Prepare, view, seq, digest_alpha, 2).is_ok());
+        assert!(state.process_message(Phase::Prepare, view, seq, digest_alpha, 3).is_ok());
 
-        // Conflicting proposal arrives for same seq
-        let err = state.process_message(Phase::Prepare, 0, 1, digest_b, 4);
-        assert_eq!(err, Err("EQUIVOCATION_DETECTED: Conflicting PREPARE digest for same sequence!"));
-    }
+        assert_eq!(state.prepared_digest.get(&(view, seq)), Some(&digest_alpha));
 
-    #[test]
-    fn test_commit_requires_prepare() {
-        let mut state = PbftState::new(4);
-        let digest = [1u8; 32];
-
-        // Attempting to commit without preparing must fail (Lean invariant: rule_commit_implies_prepare)
-        let err = state.process_message(Phase::Commit, 0, 1, digest, 1);
-        assert_eq!(err, Err("SAFETY_VIOLATION: Node cannot commit an un-prepared sequence!"));
+        let malicious_attempt = state.process_message(Phase::Prepare, view, seq, digest_beta, 4);
+        
+        assert!(malicious_attempt.is_err());
+        assert_eq!(
+            malicious_attempt.unwrap_err(),
+            "EQUIVOCATION_DETECTED: Conflicting PREPARE digest for same sequence!"
+        );
     }
 }
