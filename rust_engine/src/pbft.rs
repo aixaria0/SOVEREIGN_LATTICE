@@ -91,7 +91,6 @@ impl CommitCertificate {
 #[derive(Clone)]
 pub struct NewViewCertificate {
     pub target_view: u64,
-    // Stores each supporter's reported (seq, digest, signature)
     pub view_change_votes: HashMap<u32, (u64, [u8; 32], G1Projective)>,
     pub selected_prepared_certificate: Option<PreparedCertificate>,
 }
@@ -102,14 +101,12 @@ impl NewViewCertificate {
             return false;
         }
 
-        // 1. Verify bound prepared certificate if present
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
                 return false;
             }
         }
 
-        // 2. Verify each ViewChange vote is cryptographically bound to its claimed (target_view, seq, digest)
         let mut valid_count = 0;
         for (&node_id, &(seq, digest, ref sig)) in &self.view_change_votes {
             if let Some(pk) = public_keys.get(&node_id) {
@@ -221,22 +218,22 @@ impl PbftState {
                     let supporters = recovered_view_change_votes.entry(view).or_default();
                     supporters.insert(sender_id, (seq, digest, signature));
                     if supporters.len() >= quorum_size {
-                        // Quorum-sourced selection: find max seq among quorum supporters' reported state
                         let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
                         let best_digest = supporters.values()
                             .find(|&&(s, _, _)| s == max_quorum_seq)
                             .map(|&(_, d, _)| d)
                             .unwrap_or([0u8; 32]);
 
-                        let bound_cert = recovered_certificates.values()
-                            .filter(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(quorum_size, &initial_public_keys))
-                            .cloned()
-                            .or_else(|| {
-                                recovered_certificates.values()
-                                    .filter(|c| c.verify(quorum_size, &initial_public_keys))
-                                    .max_by_key(|c| c.seq)
-                                    .cloned()
-                            });
+                        let mut bound_cert = recovered_certificates.values()
+                            .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(quorum_size, &initial_public_keys))
+                            .cloned();
+
+                        if bound_cert.is_none() {
+                            bound_cert = recovered_certificates.values()
+                                .filter(|c| c.verify(quorum_size, &initial_public_keys))
+                                .max_by_key(|c| c.seq)
+                                .cloned();
+                        }
 
                         let nv_cert = NewViewCertificate {
                             target_view: view,
@@ -397,22 +394,27 @@ impl PbftState {
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
                     
-                    // Quorum-sourced selection: find max seq among quorum supporters' reported state
+                    let mut view_change_sigs = HashMap::new();
+                    for (&supporter_id, &(_, _, sig)) in supporters.iter() {
+                        view_change_sigs.insert(supporter_id, sig);
+                    }
+                    
                     let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
                     let best_digest = supporters.values()
                         .find(|&&(s, _, _)| s == max_quorum_seq)
                         .map(|&(_, d, _)| d)
                         .unwrap_or([0u8; 32]);
 
-                    let bound_cert = self.prepared_certificates.values()
-                        .filter(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
-                        .cloned()
-                        .or_else(|| {
-                            self.prepared_certificates.values()
-                                .filter(|c| c.verify(self.quorum_size, &self.public_keys))
-                                .max_by_key(|c| c.seq)
-                                .cloned()
-                        });
+                    let mut bound_cert = self.prepared_certificates.values()
+                        .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
+                        .cloned();
+
+                    if bound_cert.is_none() {
+                        bound_cert = self.prepared_certificates.values()
+                            .filter(|c| c.verify(self.quorum_size, &self.public_keys))
+                            .max_by_key(|c| c.seq)
+                            .cloned();
+                    }
 
                     if let Some(ref cert) = bound_cert {
                         self.highest_seq = self.highest_seq.max(cert.seq);
