@@ -3,7 +3,7 @@
 # Sovereign Lattice
 ### Provably Secure BFT Consensus Engine
 
-*Engineered and Formally Verified by **Aria Fani** ([AixAria](https://github.com/AixAria))*
+*Engineered and Formally Verified by **Aria Fani** ([AixAria](https://github.com/AixAria0))*
 
 </div>
 
