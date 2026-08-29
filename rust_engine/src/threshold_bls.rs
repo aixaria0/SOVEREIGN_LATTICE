@@ -1,7 +1,6 @@
 use bls12_381::{G1Projective, G2Projective, Scalar, pairing};
-use group::{Curve, Group};
+use group::Group;
 use sha2::{Sha256, Digest};
-use ff::Field;
 
 // برچسب استاندارد BLS12-381 برای جلوگیری از حملات Cross-Protocol
 const BLS_DST: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
@@ -16,8 +15,8 @@ pub fn hash_message_to_g1(message: &[u8]) -> G1Projective {
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(&hash_result);
     
-    // تبدیل هش به یک اسکالر امن و مپ کردن آن روی منحنی
-    let scalar = Scalar::from_bytes_mod_order(bytes);
+    // تبدیل امن هش به اسکالر در نسخه جدید bls12_381
+    let scalar = Option::from(Scalar::from_bytes(&bytes)).unwrap();
     G1Projective::generator() * scalar
 }
 
