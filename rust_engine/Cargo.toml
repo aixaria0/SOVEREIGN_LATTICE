@@ -12,3 +12,6 @@ group = "0.13"
 rand = "0.8"
 sha2 = "0.10"
 curve25519-dalek = "4.1"
+
+# Async framework for real-world concurrency
+tokio = { version = "1", features = ["full"] }
