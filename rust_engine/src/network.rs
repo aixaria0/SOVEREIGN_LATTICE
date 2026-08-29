@@ -19,12 +19,12 @@ pub async fn start_tcp_listener(addr: &str) -> Result<(), Box<dyn Error>> {
 }
 
 async fn handle_framed_connection(mut socket: TcpStream) -> Result<(), Box<dyn Error>> {
-    // خواندن ۴ بایت اول برای تشخیص طول پیام (Framing)
+    // Read 4-byte length prefix (Framing Header)
     let mut len_buf = [0u8; 4];
     socket.read_exact(&mut len_buf).await?;
     let payload_len = u32::from_be_bytes(len_buf) as usize;
 
-    // جلوگیری از حملات حافظه (رد کردن پیام‌های خیلی بزرگ یا خیلی کوچک)
+    // Prevent memory exhaustion attacks (reject overly large or small payloads)
     if payload_len > 4096 || payload_len < 40 {
         return Err("Invalid frame length or payload size mismatch".into());
     }
