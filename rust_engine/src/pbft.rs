@@ -21,7 +21,7 @@ pub struct PbftMessage {
     pub signature: G1Projective,
 }
 
-/// Fully Cryptographically Portable Prepared Certificate with real signatures
+/// Fully Cryptographically Portable Prepared Certificate
 #[derive(Clone)]
 pub struct PreparedCertificate {
     pub view: u64,
@@ -55,7 +55,7 @@ impl PreparedCertificate {
     }
 }
 
-/// Fully Cryptographically Portable Commit Certificate (First-Class Object)
+/// Fully Cryptographically Portable Commit Certificate
 #[derive(Clone)]
 pub struct CommitCertificate {
     pub view: u64,
@@ -89,6 +89,40 @@ impl CommitCertificate {
     }
 }
 
+/// First-Class NewView Certificate carrying safety evidence across view transitions
+#[derive(Clone)]
+pub struct NewViewCertificate {
+    pub target_view: u64,
+    pub highest_seq: u64,
+    pub highest_digest: [u8; 32],
+    pub signatures: HashMap<u32, G1Projective>,
+}
+
+impl NewViewCertificate {
+    pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
+        if self.signatures.len() < quorum_size {
+            return false;
+        }
+
+        let mut canonical_msg = Vec::new();
+        canonical_msg.push(Phase::ViewChange as u8);
+        canonical_msg.extend_from_slice(&self.target_view.to_be_bytes());
+        canonical_msg.extend_from_slice(&self.highest_seq.to_be_bytes());
+        canonical_msg.extend_from_slice(&self.highest_digest);
+
+        let mut valid_count = 0;
+        for (&node_id, sig) in &self.signatures {
+            if let Some(pk) = public_keys.get(&node_id) {
+                if verify_bls_signature(&canonical_msg, sig, pk) {
+                    valid_count += 1;
+                }
+            }
+        }
+
+        valid_count >= quorum_size
+    }
+}
+
 pub struct PbftState {
     pub total_nodes: usize,
     pub f: usize,
@@ -96,11 +130,12 @@ pub struct PbftState {
     pub highest_seq: u64,
     pub prepared_certificates: HashMap<(u64, u64), PreparedCertificate>,
     pub commit_certificates: HashMap<(u64, u64), CommitCertificate>,
+    pub new_view_certificates: HashMap<u64, NewViewCertificate>,
     pub committed_digest: HashMap<(u64, u64), [u8; 32]>,
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
-    view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32])>>, 
+    view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>>, 
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
     public_keys: HashMap<u32, G2Projective>,
@@ -132,6 +167,7 @@ impl PbftState {
         let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
         let mut recovered_certificates = HashMap::new();
         let mut recovered_commit_certificates = HashMap::new();
+        let mut recovered_new_view_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
         let quorum_size = 2 * f + 1;
 
@@ -174,6 +210,9 @@ impl PbftState {
                         }
                     }
                 }
+                3 => {
+                    // ViewChange replay tracking can be extended if needed
+                }
                 _ => {}
             }
         });
@@ -185,6 +224,7 @@ impl PbftState {
             highest_seq: recovered_seq,
             prepared_certificates: recovered_certificates,
             commit_certificates: recovered_commit_certificates,
+            new_view_certificates: recovered_new_view_certificates,
             committed_digest: recovered_committed,
             pre_prepared_proposals: recovered_proposals,
             prepare_votes: recovered_prepare_votes,
@@ -317,15 +357,17 @@ impl PbftState {
                 }
 
                 let supporters = self.view_change_votes.entry(msg.view).or_default();
-                supporters.insert(msg.sender_id, (msg.seq, msg.digest));
+                supporters.insert(msg.sender_id, (msg.seq, msg.digest, msg.signature));
 
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
                     
                     let mut max_seq = 0;
                     let mut best_digest = [0u8; 32];
+                    let mut view_change_sigs = HashMap::new();
                     
-                    for &(seq, digest) in supporters.values() {
+                    for (&supporter_id, &(seq, digest, sig)) in supporters.iter() {
+                        view_change_sigs.insert(supporter_id, sig);
                         if seq > max_seq {
                             max_seq = seq;
                             best_digest = digest;
@@ -334,25 +376,20 @@ impl PbftState {
                     
                     if max_seq > 0 {
                         self.highest_seq = self.highest_seq.max(max_seq);
-                        
-                        let mut inherited_sigs = HashMap::new();
-                        if let Some(existing_cert) = self.prepared_certificates.values().find(|c| c.seq == max_seq && c.digest == best_digest) {
-                            inherited_sigs = existing_cert.signatures.clone();
-                        }
-
-                        let verified_cert = PreparedCertificate {
-                            view: msg.view,
-                            seq: max_seq,
-                            digest: best_digest,
-                            signatures: inherited_sigs,
-                        };
-
-                        if verified_cert.verify(self.quorum_size, &self.public_keys) {
-                            self.prepared_certificates.insert((msg.view, max_seq), verified_cert);
-                        }
                     }
 
-                    format!("🔄 [VIEW CHANGE COMMITTED]: Quorum reached with Cryptographically Verified Certificates. Advanced to View {}.", msg.view)
+                    let new_view_cert = NewViewCertificate {
+                        target_view: msg.view,
+                        highest_seq: max_seq,
+                        highest_digest: best_digest,
+                        signatures: view_change_sigs,
+                    };
+
+                    if new_view_cert.verify(self.quorum_size, &self.public_keys) {
+                        self.new_view_certificates.insert(msg.view, new_view_cert);
+                    }
+
+                    format!("🔄 [NEW VIEW CERTIFICATE CREATED]: Quorum reached for View {}. Highest inherited Seq: {}", msg.view, max_seq)
                 } else {
                     format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
                 }
