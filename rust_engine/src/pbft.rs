@@ -84,7 +84,7 @@ impl PbftState {
 }
 
 #[cfg(test)]
-mod rigorous_correspondence_tests {
+mod rigorous_and_adversarial_tests {
     use super::*;
 
     #[test]
@@ -107,6 +107,42 @@ mod rigorous_correspondence_tests {
         assert_eq!(
             malicious_attempt.unwrap_err(),
             "EQUIVOCATION_DETECTED: Conflicting PREPARE digest for same sequence!"
+        );
+    }
+
+    #[test]
+    fn test_adversarial_equivocation_attack() {
+        let mut state = PbftState::new(4);
+        let view = 1;
+        let seq = 42;
+        let honest_digest = [0x11; 32];
+        let malicious_digest = [0x99; 32];
+
+        assert!(state.process_message(Phase::Prepare, view, seq, honest_digest, 1).is_ok());
+        assert!(state.process_message(Phase::Prepare, view, seq, honest_digest, 2).is_ok());
+
+        let equivocation_attempt = state.process_message(Phase::Prepare, view, seq, malicious_digest, 3);
+        
+        assert!(equivocation_attempt.is_err());
+        assert_eq!(
+            equivocation_attempt.unwrap_err(),
+            "EQUIVOCATION_DETECTED: Conflicting PREPARE digest for same sequence!"
+        );
+    }
+
+    #[test]
+    fn test_unprepared_commit_safety_violation() {
+        let mut state = PbftState::new(4);
+        let view = 1;
+        let seq = 100;
+        let digest = [0x55; 32];
+
+        let premature_commit = state.process_message(Phase::Commit, view, seq, digest, 1);
+
+        assert!(premature_commit.is_err());
+        assert_eq!(
+            premature_commit.unwrap_err(),
+            "SAFETY_VIOLATION: Node cannot commit an un-prepared sequence!"
         );
     }
 }
