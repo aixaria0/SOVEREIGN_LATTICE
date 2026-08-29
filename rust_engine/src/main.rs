@@ -38,7 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_pks.insert(i, kp.public_key);
     }
 
-    let pbft_state = Arc::new(Mutex::new(PbftState::new(total_nodes, initial_pks).expect("Failed to initialize PBFT topology")))?;
+    let state = PbftState::new(total_nodes, initial_pks).expect("Failed to initialize PBFT topology");
+    let pbft_state = Arc::new(Mutex::new(state));
     println!("⚙️  [CONSENSUS]: State Machine initialized for N={} (Quorum Size: {})", total_nodes, (2 * ((total_nodes - 1) / 3)) + 1);
 
     println!("📡 [NETWORK]: Booting asynchronous TCP transport daemon...");
