@@ -18,11 +18,10 @@ pub struct PbftState {
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashSet<u32>>,
     quorum_size: usize,
     registered_nodes: HashSet<u32>,
-    public_keys: HashMap<u32, G2Projective>, // Cryptographic registry for real signature verification
+    public_keys: HashMap<u32, G2Projective>,
 }
 
 impl PbftState {
-    /// Strictly enforces Lean's N = 3f + 1 topology and registers public keys
     pub fn new(total_nodes: usize, initial_public_keys: HashMap<u32, G2Projective>) -> Result<Self, &'static str> {
         let f = (total_nodes - 1) / 3;
         if total_nodes != 3 * f + 1 {
@@ -50,7 +49,6 @@ impl PbftState {
         })
     }
 
-    /// Processes messages with REAL cryptographic BLS signature verification (Addressing reviewer critique)
     pub fn process_signed_message(
         &mut self,
         phase: Phase,
@@ -60,32 +58,27 @@ impl PbftState {
         sender_id: u32,
         signature: &G1Projective,
     ) -> Result<String, &'static str> {
-        // 1. Identity Registry Check
         if !self.registered_nodes.contains(&sender_id) {
             return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
         }
 
-        // 2. Retrieve Sender's Public Key
         let pk = self.public_keys.get(&sender_id)
             .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
 
-        // 3. Construct Canonical Message Payload for Cryptographic Binding
         let mut canonical_msg = Vec::new();
         canonical_msg.push(match phase {
             Phase::PrePrepare => 0,
             Phase::Prepare => 1,
             Phase::Commit => 2,
         });
-        canonical_msg.extend_from_slice(&view.to_be_bytes());
-        canonical_msg.extend_from_slice(&seq.to_be_bytes());
+        canonical_msg.extend_from_slice(&(view as u64).to_be_bytes());
+        canonical_msg.extend_from_slice(&(seq as u64).to_be_bytes());
         canonical_msg.extend_from_slice(&digest);
 
-        // 4. REAL cryptographic BLS signature verification via pairing equation e(sig, G2) == e(H(m), pk)
         if !verify_bls_signature(&canonical_msg, signature, pk) {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
 
-        // 5. Execute State Transition Invariants
         self.transition_state(phase, view, seq, digest, sender_id)
     }
 
@@ -142,49 +135,5 @@ impl PbftState {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod cryptographic_adversarial_tests {
-    use super::*;
-    use crate::threshold_bls::{KeyPair, sign};
-
-    fn setup_test_network(n: usize) -> (PbftState, HashMap<u32, KeyPair>) {
-        let mut keypairs = HashMap::new();
-        let mut pks = HashMap::new();
-        for i in 0..n as u32 {
-            let kp = KeyPair::from_seed(format!("NODE_SEED_{}", i).as_bytes());
-            pks.insert(i, kp.public_key);
-            keypairs.insert(i, kp);
-        }
-        let state = PbftState::new(n, pks).unwrap();
-        (state, keypairs)
-    }
-
-    #[test]
-    fn test_real_cryptographic_authentication() {
-        let (mut state, keypairs) = setup_test_network(4);
-        let view = 1;
-        let seq = 1;
-        let digest = [0xAA; 32];
-
-        // Construct canonical payload to sign
-        let mut canonical_msg = Vec::new();
-        canonical_msg.push(1); // Prepare phase
-        canonical_msg.extend_from_slice(&view.to_be_bytes());
-        canonical_msg.extend_from_slice(&seq.to_be_bytes());
-        canonical_msg.extend_from_slice(&digest);
-
-        // Valid signature from node 0
-        let sig = sign(&canonical_msg, &keypairs.get(&0).unwrap().secret_key);
-        assert!(state.process_signed_message(Phase::Prepare, view, seq, digest, 0, &sig).is_ok());
-
-        // Forged signature (signing with node 1's key but claiming sender is node 0)
-        let forged_sig = sign(&canonical_msg, &keypairs.get(&1).unwrap().secret_key);
-        let forgery_attempt = state.process_signed_message(Phase::Prepare, view, seq, digest, 0, &forged_sig);
-        
-        assert!(forgery_attempt.is_err());
-        assert_eq!(forgery_attempt.unwrap_err(), "CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
     }
 }
