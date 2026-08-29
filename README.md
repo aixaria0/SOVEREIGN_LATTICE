@@ -38,9 +38,14 @@ The theoretical constraints proved in Lean 4 are mapped into a secure, event-dri
 *   `rust_engine/` — Supporting cryptographic modules (Threshold BLS, Feldman DKG, Schnorr proofs, FROST).
 *   `docs/` — Theoretical framework and formalization strategies.
 ---
-## 🛠 Status
-**Phase:** Asynchronous Network Daemon Active.  
-The core BFT safety theorems, threshold cryptographic prototypes, and live TCP network layers are successfully integrated and verified via GitHub Actions CI/CD.
+## Verification Status
+
+The Rust and Lean verification workflows are automated via GitHub Actions on every commit:
+- `lake build`
+- `cargo test --workspace --all-features`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+
+These automated checks confirm reproducible builds and unit tests in a documented environment. This is currently an **experimental research prototype**. It is not an independent security audit, and the Lean model formally verifies structural BFT conditions, not the compiled Rust binary itself.
 ---
 ## 🖋 Author
 **Aria Fani** | [AixAria](https://github.com/aixaria0)  
