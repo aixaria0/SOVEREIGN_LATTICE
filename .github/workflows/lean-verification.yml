@@ -1,0 +1,31 @@
+name: Lean 4 Formal Verification
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Build formal verification plane
+        working-directory: formal_verification
+        run: lake build
+
+      - name: Check for sorry
+        working-directory: formal_verification
+        run: |
+          if grep -r "sorry" . --include="*.lean"; then
+            echo "Found remaining 'sorry' – formalization incomplete"
+            exit 1
+          fi
+          echo "No sorry found. All theorems discharged."
