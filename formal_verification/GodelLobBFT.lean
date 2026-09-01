@@ -114,7 +114,7 @@ theorem PBFT_Safety (v : View) (seq : ℕ) (d₁ d₂ : ℕ)
   rcases h₁ with ⟨Q₁, hQ₁, hC₁⟩
   rcases h₂ with ⟨Q₂, hQ₂, hC₂⟩
   
-  have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection f hN Byzantine hByz Q₁ Q₂ hQ₁ hQ₂
+  have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection Q₁ Q₂ hQ₁ hQ₂
   have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_network_valid n hn_not_byz⟩
   
   have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
@@ -167,7 +167,7 @@ def ValidNewView (nc : NewViewCertificate) : Prop :=
     HighestQuorumClaim nc.votes max_seq best_digest ∧
     match nc.selected_cert with
     | some cert => 
-        ValidPreparedCertificate f cert ∧ cert.seq = max_seq ∧ cert.digest = best_digest
+        ValidPreparedCertificate cert ∧ cert.seq = max_seq ∧ cert.digest = best_digest
     | none => 
         max_seq = 0
 
@@ -185,7 +185,7 @@ theorem cross_view_inheritance
   (v1 v2 : View) (seq : ℕ) (dig : ℕ) (nc : NewViewCertificate)
   (h_v2_greater : v2.number > v1.number)
   (h_committed : Committed f Byzantine network_state v1 seq dig)
-  (h_valid_nv : ValidNewView f nc) 
+  (h_valid_nv : ValidNewView nc) 
   (h_nc_view : nc.target_view = v2) 
   (h_honest_network : ∀ n, n ∉ Byzantine → (network_state n).isSome)
   (h_reporting_rule : ∀ vote ∈ nc.votes, HonestViewChangeReporting Byzantine network_state v1 v2 seq dig vote) :
@@ -194,7 +194,7 @@ theorem cross_view_inheritance
   rcases h_committed with ⟨Q₁, hQ₁, hC₁⟩
   rcases h_valid_nv with ⟨hQ₂, max_seq, best_digest, hHighest, _⟩
   
-  have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection f hN Byzantine hByz Q₁ (nc.votes.image (fun v => v.sender)) hQ₁ hQ₂
+  have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection Q₁ (nc.votes.image (fun v => v.sender)) hQ₁ hQ₂
   have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_honest_network n hn_not_byz⟩
   
   have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
