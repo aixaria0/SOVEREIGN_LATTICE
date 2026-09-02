@@ -1,14 +1,18 @@
 import Mathlib.Data.Finset.Basic
 import Mathlib.Tactic
 
+-- Disable strict linter warnings to prevent build failures
+set_option linter.unusedVariables false
+set_option linter.unusedSectionVars false
+
 namespace GodelLobBFT
 
 variable {Node : Type} [DecidableEq Node] [Fintype Node]
 
--- جادوی حل ارور Typeclass: استفاده از notation به جای def
 local notation "N" => Fintype.card Node
 
-def IsQuorum (f : ℕ) (Q : Finset Node) : Prop := Q.card ≥ 2 * f + 1
+-- Use generic type α to prevent implicit argument errors
+def IsQuorum {α : Type} (f : ℕ) (Q : Finset α) : Prop := Q.card ≥ 2 * f + 1
 
 theorem quorum_intersection_size {f : ℕ} (hN : N = 3 * f + 1)
   (Q₁ Q₂ : Finset Node) (hQ₁ : IsQuorum f Q₁) (hQ₂ : IsQuorum f Q₂) :
@@ -24,8 +28,12 @@ theorem honest_quorum_intersection {f : ℕ} (hN : N = 3 * f + 1)
   ∃ n ∈ Q₁ ∩ Q₂, n ∉ Byzantine := by
   have h_int_size := quorum_intersection_size hN Q₁ Q₂ hQ₁ hQ₂
   by_contra h_all_byz
-  push_neg at h_all_byz
-  have h_subset : Q₁ ∩ Q₂ ⊆ Byzantine := fun x hx => h_all_byz x hx
+  -- Manual foundational proof to avoid push_neg deprecation warnings
+  have h_subset : Q₁ ∩ Q₂ ⊆ Byzantine := by
+    intro x hx
+    by_contra h_not_byz
+    apply h_all_byz
+    exact ⟨x, hx, h_not_byz⟩
   have h_subset_card : (Q₁ ∩ Q₂).card ≤ Byzantine.card := Finset.card_le_card h_subset
   omega
 
@@ -61,7 +69,10 @@ theorem honest_prepare_unique (Byzantine : Finset Node) (network_state : Node �
   d₁ = d₂ := by
   rcases hHonest with ⟨_, hState⟩
   cases h : network_state n with
-  | none => contradiction
+  | none =>
+    -- Replace contradiction tactic with a robust manual rewrite
+    rw [h] at hState
+    simp_all
   | some state =>
     have eq1 := hP1 state h
     have eq2 := hP2 state h
@@ -89,41 +100,42 @@ theorem PBFT_Safety {f : ℕ} (hN : N = 3 * f + 1)
   rcases h₂ with ⟨Q₂, hQ₂, hC₂⟩
   have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection hN Byzantine hByz Q₁ Q₂ hQ₁ hQ₂
   have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_network_valid n hn_not_byz⟩
-  have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
-  have hn_in_Q2 : n ∈ Q₂ := Finset.mem_inter.mp hn_int |>.right
+  have hn_in_Q1 : n ∈ Q₁ := (Finset.mem_inter.mp hn_int).left
+  have hn_in_Q2 : n ∈ Q₂ := (Finset.mem_inter.mp hn_int).right
   have hn_commits_d1 := hC₁ n hn_in_Q1 hn_honest
   have hn_commits_d2 := hC₂ n hn_in_Q2 hn_honest
   have hn_prepares_d1 := honest_commit_implies_prepare Byzantine network_state v seq d₁ n hn_honest hn_commits_d1
   have hn_prepares_d2 := honest_commit_implies_prepare Byzantine network_state v seq d₂ n hn_honest hn_commits_d2
   exact honest_prepare_unique Byzantine network_state v seq d₁ d₂ n hn_honest hn_prepares_d1 hn_prepares_d2
 
-structure PreparedCertificate where
+-- Define structures with explicit type α to prevent implicit argument errors
+structure PreparedCertificate (α : Type) where
   view : View
   seq : ℕ
   digest : ℕ
-  signers : Finset Node
+  signers : Finset α
 
-def ValidPreparedCertificate (f : ℕ) (cert : PreparedCertificate) : Prop :=
+def ValidPreparedCertificate {α : Type} (f : ℕ) (cert : PreparedCertificate α) : Prop :=
   IsQuorum f cert.signers
 
-structure ViewChangeVote where
-  sender : Node
+structure ViewChangeVote (α : Type) where
+  sender : α
   seq : ℕ
   digest : ℕ
 
-structure NewViewCertificate where
+structure NewViewCertificate (α : Type) where
   target_view : View
-  votes : Finset ViewChangeVote
-  selected_cert : Option PreparedCertificate
+  votes : Finset (ViewChangeVote α)
+  selected_cert : Option (PreparedCertificate α)
 
-noncomputable def maxQuorumSeq (votes : Finset ViewChangeVote) : ℕ :=
+noncomputable def maxQuorumSeq {α : Type} (votes : Finset (ViewChangeVote α)) : ℕ :=
   votes.sup (fun v => v.seq)
 
-def HighestQuorumClaim (votes : Finset ViewChangeVote) (max_seq : ℕ) (best_digest : ℕ) : Prop :=
+def HighestQuorumClaim {α : Type} (votes : Finset (ViewChangeVote α)) (max_seq : ℕ) (best_digest : ℕ) : Prop :=
   (∀ v ∈ votes, v.seq ≤ max_seq) ∧
   (max_seq > 0 → ∃ v ∈ votes, v.seq = max_seq ∧ v.digest = best_digest)
 
-def ValidNewView (f : ℕ) (nc : NewViewCertificate) : Prop :=
+def ValidNewView {α : Type} [DecidableEq α] (f : ℕ) (nc : NewViewCertificate α) : Prop :=
   IsQuorum f (nc.votes.image (fun v => v.sender)) ∧
   ∃ (max_seq : ℕ) (best_digest : ℕ),
     HighestQuorumClaim nc.votes max_seq best_digest ∧
@@ -134,7 +146,7 @@ def ValidNewView (f : ℕ) (nc : NewViewCertificate) : Prop :=
         max_seq = 0
 
 def HonestViewChangeReporting (Byzantine : Finset Node) (network_state : Node → Option HonestState)
-  (v1 v2 : View) (seq : ℕ) (dig : ℕ) (vote : ViewChangeVote) : Prop :=
+  (v1 v2 : View) (seq : ℕ) (dig : ℕ) (vote : ViewChangeVote Node) : Prop :=
   IsHonest Byzantine network_state vote.sender →
   NodeCommitted network_state vote.sender v1 seq dig →
   v2.number > v1.number →
@@ -143,7 +155,7 @@ def HonestViewChangeReporting (Byzantine : Finset Node) (network_state : Node �
 theorem cross_view_inheritance {f : ℕ} (hN : N = 3 * f + 1)
   (Byzantine : Finset Node) (hByz : Byzantine.card ≤ f)
   (network_state : Node → Option HonestState)
-  (v1 v2 : View) (seq : ℕ) (dig : ℕ) (nc : NewViewCertificate)
+  (v1 v2 : View) (seq : ℕ) (dig : ℕ) (nc : NewViewCertificate Node)
   (h_v2_greater : v2.number > v1.number)
   (h_committed : Committed f Byzantine network_state v1 seq dig)
   (h_valid_nv : ValidNewView f nc)
@@ -155,8 +167,8 @@ theorem cross_view_inheritance {f : ℕ} (hN : N = 3 * f + 1)
   rcases h_valid_nv with ⟨hQ₂, max_seq, best_digest, hHighest, _⟩
   have ⟨n, hn_int, hn_not_byz⟩ := honest_quorum_intersection hN Byzantine hByz Q₁ (nc.votes.image (fun v => v.sender)) hQ₁ hQ₂
   have hn_honest : IsHonest Byzantine network_state n := ⟨hn_not_byz, h_honest_network n hn_not_byz⟩
-  have hn_in_Q1 : n ∈ Q₁ := Finset.mem_inter.mp hn_int |>.left
-  have hn_in_Q2 : n ∈ nc.votes.image (fun v => v.sender) := Finset.mem_inter.mp hn_int |>.right
+  have hn_in_Q1 : n ∈ Q₁ := (Finset.mem_inter.mp hn_int).left
+  have hn_in_Q2 : n ∈ nc.votes.image (fun v => v.sender) := (Finset.mem_inter.mp hn_int).right
   rcases Finset.mem_image.mp hn_in_Q2 with ⟨vote, hvote_in, hvote_sender⟩
   have hn_commits : NodeCommitted network_state n v1 seq dig := hC₁ n hn_in_Q1 hn_honest
   have hvote_honest : IsHonest Byzantine network_state vote.sender := by
@@ -185,7 +197,9 @@ theorem Multi_View_Safety {f : ℕ} (hN : N = 3 * f + 1)
   (h_commit2 : Committed f Byzantine network_state v2 seq d2)
   (h_no_equiv : NoEquivocationAcrossViews f Byzantine network_state v1 v2 seq d1 d2) :
   d1 = d2 := by
-  rcases eq_or_lt_of_le h_v2_ge_v1 with heq | hlt
+  -- Use omega instead of legacy tactics for robustness
+  have h_cases : v1.number = v2.number ∨ v1.number < v2.number := by omega
+  rcases h_cases with heq | hlt
   · have h_v1_eq_v2 : v1 = v2 := by cases v1; cases v2; simp_all
     subst h_v1_eq_v2
     exact PBFT_Safety hN Byzantine hByz network_state v2 seq d1 d2 h_network_valid h_commit1 h_commit2
