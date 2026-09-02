@@ -201,7 +201,8 @@ theorem Multi_View_Safety {f : ℕ} (hN : N = 3 * f + 1)
   have h_cases : v1.number = v2.number ∨ v1.number < v2.number := by omega
   rcases h_cases with heq | hlt
   · have h_v1_eq_v2 : v1 = v2 := by cases v1; cases v2; simp_all
-    subst h_v1_eq_v2
+    -- Changed from `subst` to `rw` to prevent deleting `v2` from the context
+    rw [h_v1_eq_v2] at h_commit1
     exact PBFT_Safety hN Byzantine hByz network_state v2 seq d1 d2 h_network_valid h_commit1 h_commit2
   · rcases h_commit2 with ⟨Q₂, hQ₂, hC₂⟩
     have h_prep2 : Prepared f Byzantine network_state v2 seq d2 := by
