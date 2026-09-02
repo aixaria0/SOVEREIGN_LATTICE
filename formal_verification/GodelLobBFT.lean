@@ -4,7 +4,9 @@ import Mathlib.Tactic
 namespace GodelLobBFT
 
 variable {Node : Type} [DecidableEq Node] [Fintype Node]
-def N : ℕ := Fintype.card Node
+
+-- جادوی حل ارور Typeclass: استفاده از notation به جای def
+local notation "N" => Fintype.card Node
 
 def IsQuorum (f : ℕ) (Q : Finset Node) : Prop := Q.card ≥ 2 * f + 1
 
