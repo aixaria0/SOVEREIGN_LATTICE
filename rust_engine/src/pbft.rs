@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use bls12_381::{G1Projective, G2Projective};
-use crate::threshold_bls::verify_bls_signature;
+use crate::threshold_bls::{sign, verify_bls_signature};
 use crate::wal::WriteAheadLog;
+use bls12_381::{G1Projective, G2Projective};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -101,8 +101,15 @@ impl NewViewCertificate {
             return false;
         }
 
-        let max_quorum_seq = self.view_change_votes.values().map(|&(s, _, _)| s).max().unwrap_or(0);
-        let best_digest = self.view_change_votes.values()
+        let max_quorum_seq = self
+            .view_change_votes
+            .values()
+            .map(|&(s, _, _)| s)
+            .max()
+            .unwrap_or(0);
+        let best_digest = self
+            .view_change_votes
+            .values()
             .find(|&&(s, _, _)| s == max_quorum_seq)
             .map(|&(_, d, _)| d)
             .unwrap_or([0u8; 32]);
@@ -152,7 +159,7 @@ pub struct PbftState {
     pre_prepared_proposals: HashSet<(u64, u64, [u8; 32])>,
     prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
     commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>>,
-    pub view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>>, 
+    pub view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>>,
     pub quorum_size: usize,
     registered_nodes: HashSet<u32>,
     pub public_keys: HashMap<u32, G2Projective>,
@@ -160,7 +167,10 @@ pub struct PbftState {
 }
 
 impl PbftState {
-    pub fn new(total_nodes: usize, initial_public_keys: HashMap<u32, G2Projective>) -> Result<Self, &'static str> {
+    pub fn new(
+        total_nodes: usize,
+        initial_public_keys: HashMap<u32, G2Projective>,
+    ) -> Result<Self, &'static str> {
         let f = (total_nodes - 1) / 3;
         if total_nodes != 3 * f + 1 {
             return Err("TOPOLOGY_VIOLATION: Network size N must strictly satisfy N = 3f + 1!");
@@ -181,24 +191,35 @@ impl PbftState {
         let mut recovered_view = 0;
         let mut recovered_seq = 0;
         let mut recovered_proposals = HashSet::new();
-        let mut recovered_prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
-        let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> = HashMap::new();
-        let mut recovered_view_change_votes: HashMap<u64, HashMap<u32, (u64, [u8; 32], G1Projective)>> = HashMap::new();
+        let mut recovered_prepare_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> =
+            HashMap::new();
+        let mut recovered_commit_votes: HashMap<(u64, u64, [u8; 32]), HashMap<u32, G1Projective>> =
+            HashMap::new();
+        let mut recovered_view_change_votes: HashMap<
+            u64,
+            HashMap<u32, (u64, [u8; 32], G1Projective)>,
+        > = HashMap::new();
         let mut recovered_certificates = HashMap::new();
         let mut recovered_commit_certificates = HashMap::new();
         let mut recovered_new_view_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
 
         let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest, signature| {
-            if view > recovered_view { recovered_view = view; }
-            if seq > recovered_seq { recovered_seq = seq; }
-            
+            if view > recovered_view {
+                recovered_view = view;
+            }
+            if seq > recovered_seq {
+                recovered_seq = seq;
+            }
+
             match phase_u8 {
-                0 => { 
-                    recovered_proposals.insert((view, seq, digest)); 
+                0 => {
+                    recovered_proposals.insert((view, seq, digest));
                 }
                 1 => {
-                    let sigs = recovered_prepare_votes.entry((view, seq, digest)).or_default();
+                    let sigs = recovered_prepare_votes
+                        .entry((view, seq, digest))
+                        .or_default();
                     sigs.insert(sender_id, signature);
                     if sigs.len() >= quorum_size {
                         let cert = PreparedCertificate {
@@ -213,7 +234,9 @@ impl PbftState {
                     }
                 }
                 2 => {
-                    let sigs = recovered_commit_votes.entry((view, seq, digest)).or_default();
+                    let sigs = recovered_commit_votes
+                        .entry((view, seq, digest))
+                        .or_default();
                     sigs.insert(sender_id, signature);
                     if sigs.len() >= quorum_size {
                         let commit_cert = CommitCertificate {
@@ -232,15 +255,22 @@ impl PbftState {
                     let supporters = recovered_view_change_votes.entry(view).or_default();
                     supporters.insert(sender_id, (seq, digest, signature));
                     if supporters.len() >= quorum_size {
-                        let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
-                        let best_digest = supporters.values()
+                        let max_quorum_seq =
+                            supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
+                        let best_digest = supporters
+                            .values()
                             .find(|&&(s, _, _)| s == max_quorum_seq)
                             .map(|&(_, d, _)| d)
                             .unwrap_or([0u8; 32]);
 
                         let bound_cert = if max_quorum_seq > 0 {
-                            recovered_certificates.values()
-                                .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(quorum_size, &initial_public_keys))
+                            recovered_certificates
+                                .values()
+                                .find(|c| {
+                                    c.seq == max_quorum_seq
+                                        && c.digest == best_digest
+                                        && c.verify(quorum_size, &initial_public_keys)
+                                })
                                 .cloned()
                         } else {
                             None
@@ -292,7 +322,9 @@ impl PbftState {
             return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
         }
 
-        let pk = self.public_keys.get(&msg.sender_id)
+        let pk = self
+            .public_keys
+            .get(&msg.sender_id)
             .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
 
         let mut canonical_msg = Vec::new();
@@ -308,12 +340,25 @@ impl PbftState {
         let response = match msg.phase {
             Phase::PrePrepare => {
                 if msg.view != self.current_view {
-                    return Err("VIEW_MISMATCH: PrePrepare view does not match current consensus view!");
+                    return Err(
+                        "VIEW_MISMATCH: PrePrepare view does not match current consensus view!",
+                    );
                 }
 
                 let expected_leader = self.get_expected_leader(msg.view);
                 if msg.sender_id != expected_leader {
                     return Err("LEADER_VIOLATION: PrePrepare message sent by a non-leader node!");
+                }
+
+                let conflicting_proposal =
+                    self.pre_prepared_proposals
+                        .iter()
+                        .any(|&(view, seq, digest)| {
+                            view == msg.view && seq == msg.seq && digest != msg.digest
+                        });
+
+                if conflicting_proposal {
+                    return Err("EQUIVOCATION_DETECTED: Conflicting PrePrepare digest for same view and sequence!");
                 }
 
                 let proposal_key = (msg.view, msg.seq, msg.digest);
@@ -323,7 +368,10 @@ impl PbftState {
 
                 self.pre_prepared_proposals.insert(proposal_key);
                 self.highest_seq = self.highest_seq.max(msg.seq);
-                format!("📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}", msg.sender_id, msg.view, msg.seq)
+                format!(
+                    "📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}",
+                    msg.sender_id, msg.view, msg.seq
+                )
             }
 
             Phase::Prepare => {
@@ -338,21 +386,33 @@ impl PbftState {
                         digest: msg.digest,
                         signatures: sigs.clone(),
                     };
-                    
+
                     if !cert.verify(self.quorum_size, &self.public_keys) {
                         return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Prepared QC failed cryptographic verification!");
                     }
 
                     self.prepared_certificates.insert((msg.view, msg.seq), cert);
-                    format!("✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq)
+                    format!(
+                        "✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}.",
+                        msg.view, msg.seq
+                    )
                 } else {
-                    format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
+                    format!(
+                        "⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}",
+                        msg.sender_id,
+                        sigs.len(),
+                        self.quorum_size
+                    )
                 }
             }
 
             Phase::Commit => {
-                let has_valid_certificate = self.prepared_certificates.values()
-                    .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys));
+                let has_valid_certificate = self.prepared_certificates.values().any(|cert| {
+                    cert.view == msg.view
+                        && cert.seq == msg.seq
+                        && cert.digest == msg.digest
+                        && cert.verify(self.quorum_size, &self.public_keys)
+                });
 
                 if !has_valid_certificate {
                     return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Prepared Certificate!");
@@ -360,7 +420,9 @@ impl PbftState {
 
                 if let Some(existing_digest) = self.committed_digest.get(&(msg.view, msg.seq)) {
                     if existing_digest != &msg.digest {
-                        return Err("EQUIVOCATION_DETECTED: Conflicting COMMIT digest for same sequence!");
+                        return Err(
+                            "EQUIVOCATION_DETECTED: Conflicting COMMIT digest for same sequence!",
+                        );
                     }
                 }
 
@@ -380,22 +442,35 @@ impl PbftState {
                         return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Commit Certificate failed cryptographic verification!");
                     }
 
-                    self.commit_certificates.insert((msg.view, msg.seq), commit_cert);
-                    self.committed_digest.insert((msg.view, msg.seq), msg.digest);
+                    self.commit_certificates
+                        .insert((msg.view, msg.seq), commit_cert);
+                    self.committed_digest
+                        .insert((msg.view, msg.seq), msg.digest);
                     format!("🏆 [COMMITTED WITH CERTIFICATE]: Sequence {} definitively committed under View {}.", msg.seq, msg.view)
                 } else {
-                    format!("⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
+                    format!(
+                        "⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}",
+                        msg.sender_id,
+                        sigs.len(),
+                        self.quorum_size
+                    )
                 }
             }
 
             Phase::ViewChange => {
                 if msg.view <= self.current_view {
-                    return Err("VIEW_CHANGE_INVALID: Target view must be greater than current view!");
+                    return Err(
+                        "VIEW_CHANGE_INVALID: Target view must be greater than current view!",
+                    );
                 }
 
                 if msg.seq > 0 {
-                    let has_valid_qc = self.prepared_certificates.values()
-                        .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys));
+                    let has_valid_qc = self.prepared_certificates.values().any(|cert| {
+                        cert.view == msg.view
+                            && cert.seq == msg.seq
+                            && cert.digest == msg.digest
+                            && cert.verify(self.quorum_size, &self.public_keys)
+                    });
 
                     if !has_valid_qc {
                         return Err("CERTIFICATE_INVALID: ViewChange rejected; missing cryptographically verified Quorum Certificate!");
@@ -407,18 +482,25 @@ impl PbftState {
 
                 if supporters.len() >= self.quorum_size {
                     self.current_view = msg.view;
-                    
+
                     let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
-                    let best_digest = supporters.values()
+                    let best_digest = supporters
+                        .values()
                         .find(|&&(s, _, _)| s == max_quorum_seq)
                         .map(|&(_, d, _)| d)
                         .unwrap_or([0u8; 32]);
 
                     let bound_cert = if max_quorum_seq > 0 {
-                        let cert_opt = self.prepared_certificates.values()
-                            .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
+                        let cert_opt = self
+                            .prepared_certificates
+                            .values()
+                            .find(|c| {
+                                c.seq == max_quorum_seq
+                                    && c.digest == best_digest
+                                    && c.verify(self.quorum_size, &self.public_keys)
+                            })
                             .cloned();
-                        
+
                         // Strict Invariant: No Fallback
                         if cert_opt.is_none() {
                             return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-seq PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
@@ -445,12 +527,25 @@ impl PbftState {
                     self.new_view_certificates.insert(msg.view, new_view_cert);
                     format!("🔄 [STRICT QUORUM-SOURCED BOUND NEW VIEW CERTIFICATE]: Quorum reached for View {}. Inherited Seq: {}", msg.view, max_quorum_seq)
                 } else {
-                    format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
+                    format!(
+                        "🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}",
+                        msg.view,
+                        supporters.len(),
+                        self.quorum_size
+                    )
                 }
             }
         };
 
-        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
+        self.wal
+            .append_entry(
+                msg.view,
+                msg.seq,
+                msg.phase as u8,
+                msg.sender_id,
+                &msg.digest,
+                &msg.signature,
+            )
             .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
 
         Ok(response)
@@ -461,8 +556,8 @@ impl PbftState {
 mod adversarial_tests {
     use super::*;
     use bls12_381::{G1Projective, G2Projective, Scalar};
-    use rand::rngs::OsRng;
     use ff::Field;
+    use rand::rngs::OsRng;
 
     fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
         let mut secret_keys = HashMap::new();
@@ -481,12 +576,144 @@ mod adversarial_tests {
     }
 
     #[test]
+    fn test_conflicting_preprepare_rejected() {
+        let n = 4; // 3f + 1, where f = 1
+        let (secret_keys, public_keys) = generate_test_keys(n);
+
+        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+
+        let view = state.current_view;
+        let leader_id = state.get_expected_leader(view);
+        let seq = state.highest_seq + 1;
+        let digest_a = [0xaa; 32];
+        let digest_b = [0xbb; 32];
+
+        let mut canonical_a = Vec::new();
+        canonical_a.push(Phase::PrePrepare as u8);
+        canonical_a.extend_from_slice(&view.to_be_bytes());
+        canonical_a.extend_from_slice(&seq.to_be_bytes());
+        canonical_a.extend_from_slice(&digest_a);
+
+        let msg_a = PbftMessage {
+            phase: Phase::PrePrepare,
+            view,
+            seq,
+            digest: digest_a,
+            sender_id: leader_id,
+            signature: sign(&canonical_a, &secret_keys[&leader_id]),
+        };
+
+        let first_result = state.handle_message(&msg_a);
+        assert!(
+            first_result.is_ok(),
+            "First valid PrePrepare must be accepted, got: {:?}",
+            first_result
+        );
+
+        let mut canonical_b = Vec::new();
+        canonical_b.push(Phase::PrePrepare as u8);
+        canonical_b.extend_from_slice(&view.to_be_bytes());
+        canonical_b.extend_from_slice(&seq.to_be_bytes());
+        canonical_b.extend_from_slice(&digest_b);
+
+        let msg_b = PbftMessage {
+            phase: Phase::PrePrepare,
+            view,
+            seq,
+            digest: digest_b,
+            sender_id: leader_id,
+            signature: sign(&canonical_b, &secret_keys[&leader_id]),
+        };
+
+        let result = state.handle_message(&msg_b);
+
+        assert!(result.is_err(), "Conflicting PrePrepare must be rejected");
+
+        assert!(
+            result.unwrap_err().contains("EQUIVOCATION_DETECTED"),
+            "Expected EQUIVOCATION_DETECTED error"
+        );
+    }
+
+    #[test]
+    fn test_cross_view_commit_certificate_rejected() {
+        let n = 4; // 3f + 1, where f = 1
+        let (secret_keys, public_keys) = generate_test_keys(n);
+
+        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+
+        let prepared_view: u64 = 0;
+        let commit_view: u64 = 1;
+        let seq = state.highest_seq + 1;
+        let digest = [0xcc; 32];
+
+        let mut canonical_prepare = Vec::new();
+        canonical_prepare.push(Phase::Prepare as u8);
+        canonical_prepare.extend_from_slice(&prepared_view.to_be_bytes());
+        canonical_prepare.extend_from_slice(&seq.to_be_bytes());
+        canonical_prepare.extend_from_slice(&digest);
+
+        let mut signatures = HashMap::new();
+        for node_id in 0..3u32 {
+            signatures.insert(node_id, sign(&canonical_prepare, &secret_keys[&node_id]));
+        }
+
+        let prepared_cert = PreparedCertificate {
+            view: prepared_view,
+            seq,
+            digest,
+            signatures,
+        };
+
+        assert!(
+            prepared_cert.verify(state.quorum_size, &state.public_keys),
+            "Test fixture must contain a valid Prepared Certificate"
+        );
+
+        state
+            .prepared_certificates
+            .insert((prepared_view, seq), prepared_cert);
+
+        let mut canonical_commit = Vec::new();
+        canonical_commit.push(Phase::Commit as u8);
+        canonical_commit.extend_from_slice(&commit_view.to_be_bytes());
+        canonical_commit.extend_from_slice(&seq.to_be_bytes());
+        canonical_commit.extend_from_slice(&digest);
+
+        let commit_msg = PbftMessage {
+            phase: Phase::Commit,
+            view: commit_view,
+            seq,
+            digest,
+            sender_id: 0,
+            signature: sign(&canonical_commit, &secret_keys[&0]),
+        };
+
+        let result = state.handle_message(&commit_msg);
+
+        assert!(
+            result.is_err(),
+            "Commit must reject a Prepared Certificate from another view"
+        );
+
+        assert!(
+            result.unwrap_err().contains("SAFETY_VIOLATION"),
+            "Expected SAFETY_VIOLATION for cross-view certificate reuse"
+        );
+
+        assert!(
+            !state.committed_digest.contains_key(&(commit_view, seq)),
+            "Cross-view certificate must never produce a committed state"
+        );
+    }
+
+    #[test]
     fn test_ghost_certificate_attack_rejected() {
         let n = 4; // 3f + 1, where f = 1
         let (secret_keys, public_keys) = generate_test_keys(n);
-        
+
         let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
-        
+
         // Fix: Explicitly define types as u64 to prevent compiler ambiguity
         let target_view: u64 = 1;
         let malicious_seq: u64 = 999; // Ghost sequence
@@ -512,27 +739,37 @@ mod adversarial_tests {
         let msg1 = create_view_change(1, &secret_keys[&1]);
         let msg2 = create_view_change(2, &secret_keys[&2]);
         let msg3 = create_view_change(3, &secret_keys[&3]);
-        
+
         let supporters = state.view_change_votes.entry(target_view).or_default();
         supporters.insert(1, (malicious_seq, malicious_digest, msg1.signature));
         supporters.insert(2, (malicious_seq, malicious_digest, msg2.signature));
         supporters.insert(3, (malicious_seq, malicious_digest, msg3.signature));
 
         let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
-        let best_digest = supporters.values()
+        let best_digest = supporters
+            .values()
             .find(|&&(s, _, _)| s == max_quorum_seq)
             .map(|&(_, d, _)| d)
             .unwrap_or([0u8; 32]);
 
         let bound_cert = if max_quorum_seq > 0 {
-            state.prepared_certificates.values()
-                .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(state.quorum_size, &state.public_keys))
+            state
+                .prepared_certificates
+                .values()
+                .find(|c| {
+                    c.seq == max_quorum_seq
+                        && c.digest == best_digest
+                        && c.verify(state.quorum_size, &state.public_keys)
+                })
                 .cloned()
         } else {
             None
         };
 
-        assert!(bound_cert.is_none(), "Node 0 magically found a ghost certificate!");
+        assert!(
+            bound_cert.is_none(),
+            "Node 0 magically found a ghost certificate!"
+        );
         let is_rejected = bound_cert.is_none() && max_quorum_seq > 0;
         assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
     }
