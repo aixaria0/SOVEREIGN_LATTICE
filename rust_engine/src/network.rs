@@ -1,9 +1,10 @@
-use tokio::net::{TcpListener, TcpStream};
+    use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+#[allow(dead_code)]
 pub struct NetworkNode {
     pub node_id: u32,
     pub address: SocketAddr,
@@ -38,7 +39,6 @@ impl NetworkNode {
                     let mut buffer = vec![0u8; len];
                     if socket.read_exact(&mut buffer).await.is_ok() {
                         println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
-                        // Invoke the handler to prevent unused variable warnings and process incoming data
                         handler(0, buffer);
                     }
                 }
@@ -61,4 +61,3 @@ impl NetworkNode {
         Ok(())
     }
 }
-
