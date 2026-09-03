@@ -29,7 +29,7 @@ impl NetworkNode {
 
         loop {
             let (mut socket, peer_addr) = listener.accept().await?;
-            let _handler = Arc::clone(&message_handler);
+            let handler = Arc::clone(&message_handler);
 
             tokio::spawn(async move {
                 let mut len_buf = [0u8; 4];
@@ -38,6 +38,8 @@ impl NetworkNode {
                     let mut buffer = vec![0u8; len];
                     if socket.read_exact(&mut buffer).await.is_ok() {
                         println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
+                        // Invoke the handler to prevent unused variable warnings and process incoming data
+                        handler(0, buffer);
                     }
                 }
             });
@@ -59,3 +61,4 @@ impl NetworkNode {
         Ok(())
     }
 }
+
