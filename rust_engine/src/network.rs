@@ -2,6 +2,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 pub struct NetworkNode {
     pub node_id: u32,
@@ -18,13 +19,17 @@ impl NetworkNode {
         }
     }
 
-    pub async fn start_listener(&self, mut message_handler: impl FnMut(u32, Vec<u8>) + Send + 'static) -> Result<(), Box<dyn std::error::Error>> {
+    /// Initialize the listener server to handle incoming P2P messages asynchronously
+    pub async fn start_listener(
+        &self, 
+        message_handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync + 'static>
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(self.address).await?;
         println!("🎧 [NODE {}]: Listening for P2P messages on {}", self.node_id, self.address);
 
         loop {
             let (mut socket, peer_addr) = listener.accept().await?;
-            let mut _handler = message_handler.clone();
+            let _handler = Arc::clone(&message_handler);
 
             tokio::spawn(async move {
                 let mut len_buf = [0u8; 4];
@@ -39,6 +44,7 @@ impl NetworkNode {
         }
     }
 
+    /// Send a payload to a specific target node in the network registry
     pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         let peer_addr = self.peers.get(&target_id)
             .ok_or("NETWORK_ERROR: Target node address not found in peer registry!")?;
