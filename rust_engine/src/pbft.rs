@@ -1,4 +1,4 @@
-Use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use bls12_381::{G1Projective, G2Projective};
 use crate::threshold_bls::verify_bls_signature;
 use crate::wal::WriteAheadLog;
@@ -175,7 +175,14 @@ impl PbftState {
             }
         }
 
-        let mut wal = WriteAheadLog::open("consensus_wal.log")
+        // Dynamically isolate WAL path during tests to prevent parallel file collisions in CI
+        let wal_path = if cfg!(test) {
+            format!("consensus_wal_{:?}.log", std::thread::current().id())
+        } else {
+            "consensus_wal.log".to_string()
+        };
+
+        let mut wal = WriteAheadLog::open(&wal_path)
             .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
 
         let mut recovered_view = 0;
@@ -246,7 +253,6 @@ impl PbftState {
                             None
                         };
 
-                        // Strict WAL Replay: No Fallback
                         if max_quorum_seq == 0 || bound_cert.is_some() {
                             let nv_cert = NewViewCertificate {
                                 target_view: view,
@@ -419,7 +425,6 @@ impl PbftState {
                             .find(|c| c.seq == max_quorum_seq && c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
                             .cloned();
                         
-                        // Strict Invariant: No Fallback
                         if cert_opt.is_none() {
                             return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-seq PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
                         }
@@ -487,9 +492,8 @@ mod adversarial_tests {
         
         let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
         
-        // Fix: Explicitly define types as u64 to prevent compiler ambiguity
         let target_view: u64 = 1;
-        let malicious_seq: u64 = 999; // Ghost sequence
+        let malicious_seq: u64 = 999; 
         let malicious_digest = [0xbb; 32];
 
         let mut create_view_change = |sender_id: u32, sk: &Scalar| {
