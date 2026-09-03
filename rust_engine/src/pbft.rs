@@ -107,7 +107,6 @@ impl NewViewCertificate {
             .map(|&(_, d, _)| d)
             .unwrap_or([0u8; 32]);
 
-        // STRICT INVARIANT: Attached cert must cryptographically match the quorum's highest claim.
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
                 return false;
@@ -117,7 +116,7 @@ impl NewViewCertificate {
             }
         } else {
             if max_quorum_seq > 0 {
-                return false; // Safety Violation: Quorum claimed a state, but evidence is missing!
+                return false;
             }
         }
 
@@ -175,7 +174,6 @@ impl PbftState {
             }
         }
 
-        // Dynamically isolate WAL path during tests to prevent parallel file collisions in CI
         let wal_path = if cfg!(test) {
             format!("consensus_wal_{:?}.log", std::thread::current().id())
         } else {
@@ -487,7 +485,7 @@ mod adversarial_tests {
 
     #[test]
     fn test_ghost_certificate_attack_rejected() {
-        let n = 4; // 3f + 1, where f = 1
+        let n = 4;
         let (secret_keys, public_keys) = generate_test_keys(n);
         
         let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
