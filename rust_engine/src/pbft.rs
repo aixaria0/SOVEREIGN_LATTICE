@@ -149,6 +149,7 @@ impl NewViewCertificate {
 
 pub struct PbftState {
     pub total_nodes: usize,
+    #[allow(dead_code)]
     pub f: usize,
     pub current_view: u64,
     pub highest_seq: u64,
@@ -719,7 +720,7 @@ mod adversarial_tests {
         let malicious_seq: u64 = 999; // Ghost sequence
         let malicious_digest = [0xbb; 32];
 
-        let mut create_view_change = |sender_id: u32, sk: &Scalar| {
+        let create_view_change = |sender_id: u32, sk: &Scalar| {
             let mut canonical_msg = Vec::new();
             canonical_msg.push(Phase::ViewChange as u8);
             canonical_msg.extend_from_slice(&target_view.to_be_bytes());
