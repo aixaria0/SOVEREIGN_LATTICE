@@ -1,42 +1,55 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use crate::pbft::PbftState;
-use std::error::Error;
+use std::collections::HashMap;
+use std::net::SocketAddr;
 
-pub async fn start_tcp_listener(addr: &str, state: Arc<Mutex<PbftState>>) -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind(addr).await?;
-    println!("📡 [NETWORK]: Hardened TCP socket listening on {}", addr);
-
-    loop {
-        let (socket, peer_addr) = listener.accept().await?;
-        let state_clone = Arc::clone(&state);
-        
-        tokio::spawn(async move {
-            println!("🌐 [NETWORK]: Connection accepted from {}", peer_addr);
-            if let Err(e) = handle_connection(socket, state_clone).await {
-                eprintln!("⚠️ [STREAM ERROR]: {}", e);
-            }
-        });
-    }
+pub struct NetworkNode {
+    pub node_id: u32,
+    pub address: SocketAddr,
+    pub peers: HashMap<u32, SocketAddr>,
 }
 
-async fn handle_connection(mut socket: TcpStream, state: Arc<Mutex<PbftState>>) -> Result<(), Box<dyn Error>> {
-    let mut len_buf = [0u8; 4];
-    socket.read_exact(&mut len_buf).await?;
-    let payload_len = u32::from_be_bytes(len_buf) as usize;
-
-    if payload_len < 41 || payload_len > 4096 {
-        return Err("Invalid frame length".into());
+impl NetworkNode {
+    pub fn new(node_id: u32, address: SocketAddr, peers: HashMap<u32, SocketAddr>) -> Self {
+        Self {
+            node_id,
+            address,
+            peers,
+        }
     }
 
-    let mut payload = vec![0u8; payload_len];
-    socket.read_exact(&mut payload).await?;
+    pub async fn start_listener(&self, mut message_handler: impl FnMut(u32, Vec<u8>) + Send + 'static) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind(self.address).await?;
+        println!("🎧 [NODE {}]: Listening for P2P messages on {}", self.node_id, self.address);
 
-    let _pbft = state.lock().await;
+        loop {
+            let (mut socket, peer_addr) = listener.accept().await?;
+            let mut _handler = message_handler.clone();
 
-    println!("🔍 [NETWORK]: Secure cryptographic frame received. Ready for state machine validation.");
-    socket.write_all(b"ACK_SECURE_FRAME_PROCESSED").await?;
-    Ok(())
+            tokio::spawn(async move {
+                let mut len_buf = [0u8; 4];
+                if socket.read_exact(&mut len_buf).await.is_ok() {
+                    let len = u32::from_be_bytes(len_buf) as usize;
+                    let mut buffer = vec![0u8; len];
+                    if socket.read_exact(&mut buffer).await.is_ok() {
+                        println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
+                    }
+                }
+            });
+        }
+    }
+
+    pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let peer_addr = self.peers.get(&target_id)
+            .ok_or("NETWORK_ERROR: Target node address not found in peer registry!")?;
+
+        let mut stream = TcpStream::connect(peer_addr).await?;
+        
+        let len_bytes = (payload.len() as u32).to_be_bytes();
+        stream.write_all(&len_bytes).await?;
+        stream.write_all(payload).await?;
+
+        println!("📤 [NODE {}]: Sent {} bytes to Node {}", self.node_id, payload.len(), target_id);
+        Ok(())
+    }
 }
