@@ -45,13 +45,6 @@ impl NetworkNode {
         }
     }
 
-    pub async fn start_tcp_listener(
-        &self, 
-        message_handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync + 'static>
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.start_listener(message_handler).await
-    }
-
     pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         let peer_addr = self.peers.get(&target_id)
             .ok_or("NETWORK_ERROR: Target node address not found in peer registry!")?;
@@ -64,5 +57,31 @@ impl NetworkNode {
 
         println!("📤 [NODE {}]: Sent {} bytes to Node {}", self.node_id, payload.len(), target_id);
         Ok(())
+    }
+}
+
+/// Module-level free function matching main.rs import: use crate::network::start_tcp_listener;
+pub async fn start_tcp_listener(
+    address: SocketAddr,
+    message_handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync + 'static>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind(address).await?;
+    println!("🎧 [LISTENER]: Starting TCP listener on {}", address);
+
+    loop {
+        let (mut socket, peer_addr) = listener.accept().await?;
+        let handler = Arc::clone(&message_handler);
+
+        tokio::spawn(async move {
+            let mut len_buf = [0u8; 4];
+            if socket.read_exact(&mut len_buf).await.is_ok() {
+                let len = u32::from_be_bytes(len_buf) as usize;
+                let mut buffer = vec![0u8; len];
+                if socket.read_exact(&mut buffer).await.is_ok() {
+                    println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
+                    handler(0, buffer);
+                }
+            }
+        });
     }
 }
