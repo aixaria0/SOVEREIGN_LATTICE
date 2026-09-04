@@ -10,8 +10,11 @@ fn test_full_consensus_lifecycle() {
         public_keys.insert(i, G2Projective::generator());
     }
 
+    // Inject dummy master_pk for the test environment
+    let master_pk = G2Projective::generator();
+
     // 1. Verify cluster initialization under N = 3f + 1
-    let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to initialize cluster");
+    let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Failed to initialize cluster");
     assert_eq!(state.total_nodes, 4);
     assert_eq!(state.f, 1);
     assert_eq!(state.quorum_size, 3);
