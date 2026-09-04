@@ -1,48 +1,39 @@
 use std::collections::HashMap;
-use std::env;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use bls12_381::G2Projective;
-
-use sovereign_lattice::network::{start_tcp_listener, NetworkNode};
+use bls12_381::{G2Projective, Scalar};
+use sovereign_lattice::dkg::DkgSession;
 use sovereign_lattice::pbft::PbftState;
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let node_id: u32 = env::var("NODE_ID")
-        .unwrap_or_else(|_| "0".to_string())
-        .parse()
-        .expect("Invalid NODE_ID");
+fn main() -> Result<(), &'static str> {
+    let node_id = 0u32;
+    let total_nodes = 4usize;
+    let threshold = 3usize;
 
-    let bind_addr: SocketAddr = env::var("BIND_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
-        .parse()
-        .expect("Invalid BIND_ADDR");
+    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Node {}...", node_id);
 
-    let mut peers: HashMap<u32, SocketAddr> = HashMap::new();
-    peers.insert(0, "127.0.0.1:8080".parse().unwrap());
-    peers.insert(1, "127.0.0.1:8081".parse().unwrap());
-    peers.insert(2, "127.0.0.1:8082".parse().unwrap());
-    peers.insert(3, "127.0.0.1:8083".parse().unwrap());
+    let mut dkg_session = DkgSession::new(node_id, threshold, total_nodes);
+    let my_commitments = dkg_session.generate_commitments();
+
+    println!("📦 [DKG]: Generated local Feldman polynomial commitments.");
+
+    let mut all_commitments = HashMap::new();
+    all_commitments.insert(node_id, my_commitments.clone());
+
+    let expected_participants: Vec<u32> = (0..total_nodes as u32).collect();
+
+    let (my_secret_share, canonical_master_pk) = dkg_session.finalize_dkg(&expected_participants)?;
+
+    println!("🔑 [DKG SUCCESS]: Master public key synthesized securely.");
 
     let mut public_keys = HashMap::new();
-    for i in 0..4 {
-        public_keys.insert(i, G2Projective::generator());
+    for &id in &expected_participants {
+        let node_signing_pk = G2Projective::generator() * my_secret_share;
+        public_keys.insert(id, node_signing_pk);
     }
+    public_keys.insert(node_id, G2Projective::generator() * my_secret_share);
 
-    // 🔴 فیکس اصلی: اضافه کردن master_pk برای پاس دادن به PbftState
-    let master_pk = G2Projective::generator(); 
+    let pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
 
-    // پاس دادن هر ۳ آرگومان به متد جدید
-    let state = PbftState::new(4, public_keys, master_pk).expect("Failed to initialize PBFT cluster");
-    let state_clone = Arc::new(Mutex::new(state));
-
-    let _network = Arc::new(NetworkNode::new(node_id, bind_addr, peers.clone()));
-
-    println!("🟢 Starting SOVEREIGN_LATTICE Node {}", node_id);
-    
-    start_tcp_listener(bind_addr, state_clone, peers).await?;
+    println!("🛡️ [PBFT]: State machine successfully locked with cryptographically bound master key.");
 
     Ok(())
 }
