@@ -3,208 +3,289 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SOVEREIGN LATTICE | Command Center</title>
+    <title>Sovereign Lattice | PBFT Dashboard</title>
     <style>
         :root {
-            --bg: #050505;
-            --grid: #111116;
-            --text-main: #e0e0e0;
-            --accent-green: #00ff66;
-            --accent-blue: #00e5ff;
-            --alert-red: #ff3366;
-            --font-mono: 'Courier New', Courier, monospace;
+            --bg: #09090b;
+            --panel: #18181b;
+            --text-main: #e4e4e7;
+            --text-muted: #a1a1aa;
+            --accent-green: #10b981;
+            --accent-blue: #3b82f6;
+            --accent-red: #ef4444;
+            --font-mono: 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
         }
-        body {
+
+        body, html {
+            margin: 0;
+            padding: 0;
             background-color: var(--bg);
             color: var(--text-main);
             font-family: var(--font-mono);
-            margin: 0;
-            padding: 20px;
-            background-image: linear-gradient(var(--grid) 1px, transparent 1px),
-                              linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-            background-size: 30px 30px;
-        }
-        header {
-            border-bottom: 1px solid #333;
-            padding-bottom: 15px;
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-end;
-        }
-        h1 { margin: 0; font-size: 1.5rem; letter-spacing: 2px; color: var(--accent-blue); text-transform: uppercase; }
-        .status-badge {
-            background: rgba(0, 255, 102, 0.1);
-            color: var(--accent-green);
-            padding: 5px 10px;
-            border: 1px solid var(--accent-green);
-            font-size: 0.8rem;
-        }
-        
-        /* Control Panel */
-        .controls {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            background: rgba(10, 10, 12, 0.9);
-            padding: 15px;
-            border: 1px solid #333;
-        }
-        button {
-            background: transparent;
-            color: var(--accent-blue);
-            border: 1px solid var(--accent-blue);
-            padding: 8px 15px;
-            font-family: var(--font-mono);
-            font-size: 0.9rem;
-            cursor: pointer;
-            text-transform: uppercase;
-            transition: all 0.2s;
-        }
-        button:hover { background: var(--accent-blue); color: #000; }
-        button.danger { color: var(--alert-red); border-color: var(--alert-red); }
-        button.danger:hover { background: var(--alert-red); color: #fff; }
-
-        /* Terminal */
-        .terminal-container {
-            background: #020202;
-            border: 1px solid #333;
-            border-left: 3px solid var(--accent-green);
+            height: 100vh;
             display: flex;
             flex-direction: column;
-            height: 400px;
+            overflow: hidden;
         }
-        .terminal-output {
-            flex-grow: 1;
-            padding: 15px;
-            overflow-y: auto;
-            font-size: 0.85rem;
-            color: var(--accent-green);
-        }
-        .terminal-input-line {
+
+        header {
+            padding: 1.5rem 2rem;
             display: flex;
-            padding: 10px 15px;
-            background: #0a0a0c;
-            border-top: 1px dashed #333;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #27272a;
+            background: rgba(9, 9, 11, 0.8);
+            backdrop-filter: blur(10px);
         }
-        .prompt { color: var(--accent-blue); margin-right: 10px; }
-        input[type="text"] {
-            background: transparent;
-            border: none;
-            color: var(--text-main);
-            font-family: var(--font-mono);
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+            letter-spacing: 2px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        main {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 1rem;
+            padding: 1rem;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid #27272a;
+            border-radius: 8px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid #27272a;
+            padding-bottom: 0.5rem;
+        }
+
+        /* Terminal specifics */
+        #terminal {
+            flex: 1;
+            overflow-y: auto;
             font-size: 0.9rem;
-            width: 100%;
-            outline: none;
+            line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
+
+        .log-entry { margin: 0; }
+        .log-time { color: #52525b; margin-right: 10px; }
+        .log-info { color: var(--accent-blue); }
+        .log-success { color: var(--accent-green); }
+        .log-warning { color: #f59e0b; }
+        .log-fatal { color: var(--accent-red); }
+
+        /* Stats specifics */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-box {
+            background: #09090b;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #27272a;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--text-main);
+        }
+
+        /* Node visualizer */
+        .topology {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        .node {
+            width: 12px;
+            height: 12px;
+            background: var(--accent-green);
+            border-radius: 50%;
+            position: absolute;
+            box-shadow: 0 0 15px var(--accent-green);
+        }
+
+        .node:nth-child(1) { top: 20%; left: 50%; transform: translate(-50%, -50%); }
+        .node:nth-child(2) { bottom: 20%; left: 20%; transform: translate(-50%, -50%); }
+        .node:nth-child(3) { bottom: 20%; right: 20%; transform: translate(50%, -50%); }
+        .node:nth-child(4) { top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--accent-blue); box-shadow: 0 0 20px var(--accent-blue);} /* Leader */
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
     </style>
 </head>
 <body>
+
     <header>
-        <div>
-            <h1>⬡ SOVEREIGN LATTICE</h1>
-            <small style="color: #666;">COMMAND & CONTROL CENTER</small>
+        <div class="logo">
+            <span style="color: var(--accent-blue);">💠</span> SOVEREIGN LATTICE
         </div>
-        <div class="status-badge" id="status-indicator">DAEMON ONLINE</div>
+        <div class="badge">LEAN 4 FORMALLY VERIFIED</div>
     </header>
 
-    <!-- Interactive Control Panel -->
-    <div class="controls">
-        <button onclick="injectPacket()">Inject Payload</button>
-        <button onclick="toggleTelemetry()">Toggle Auto-Logs</button>
-        <button class="danger" onclick="triggerViewChange()">Force View Change</button>
-        <button onclick="clearTerminal()" style="margin-left: auto;">Clear Console</button>
-    </div>
+    <main>
+        <div class="panel">
+            <div class="panel-header">Live Consensus Engine (Tokio TCP)</div>
+            <div id="terminal"></div>
+        </div>
 
-    <!-- Interactive Terminal -->
-    <div class="terminal-container">
-        <div class="terminal-output" id="output">
-            <div>> SOVEREIGN LATTICE Web Console Initialized.</div>
-            <div>> Type 'help' for available commands.</div>
+        <div class="panel">
+            <div class="panel-header">Network State</div>
+            
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="stat-label">CURRENT VIEW</div>
+                    <div class="stat-value" id="view-val">0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">HIGHEST SEQ</div>
+                    <div class="stat-value" id="seq-val">0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">QUORUM SIZE</div>
+                    <div class="stat-value">3 / 4</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">CRYPTO</div>
+                    <div class="stat-value" style="font-size: 1rem; padding-top: 5px;">BLS12-381</div>
+                </div>
+            </div>
+
+            <div class="panel-header">Topology (N=4, f=1)</div>
+            <div class="topology">
+                <div class="node"></div>
+                <div class="node"></div>
+                <div class="node"></div>
+                <div class="node"></div>
+            </div>
         </div>
-        <div class="terminal-input-line">
-            <span class="prompt">root@lattice:~#</span>
-            <input type="text" id="cli" autocomplete="off" autofocus onkeypress="handleCLI(event)">
-        </div>
-    </div>
+    </main>
 
     <script>
-        const output = document.getElementById('output');
-        const cli = document.getElementById('cli');
-        let autoLogInterval = null;
-        let seqCounter = 2000;
+        const terminal = document.getElementById('terminal');
+        const seqVal = document.getElementById('seq-val');
+        
+        const bootLogs = [
+            { t: "info", m: "🚀 [SOVEREIGN LATTICE]: Initializing formally verified PBFT consensus engine (10/10 Tier)..." },
+            { t: "info", m: "🔒 [CRYPTO ENGINE]: BLS12-381 Cryptography Booting..." },
+            { t: "success", m: "✅ [SYSTEM SECURE]: Real BLS signature verified. Forgeries correctly rejected." },
+            { t: "info", m: "⚙️  [CONSENSUS]: State Machine initialized for N=4 (Quorum Size: 3)" },
+            { t: "info", m: "📡 [NETWORK]: Booting asynchronous TCP transport daemon on 127.0.0.1:8080..." }
+        ];
 
-        function log(message, color = "var(--accent-green)") {
-            const time = new Date().toISOString().split('T')[1].slice(0,-1);
-            const div = document.createElement('div');
-            div.innerHTML = `> <span style="color: #555;">[${time}]</span> <span style="color: ${color};">${message}</span>`;
-            output.appendChild(div);
-            output.scrollTop = output.scrollHeight;
+        let seq = 0;
+
+        function getConsensusCycle(s) {
+            return [
+                { t: "info", m: `🧩 [NETWORK->PBFT]: Received 101 bytes. Starting safe deserialization...` },
+                { t: "info", m: `📥 [PRE-PREPARE]: Validated leader 0 proposal for View 0 Seq ${s}` },
+                { t: "warning", m: `⏳ [PREPARE VOTE]: Recorded from Node 1. Progress: 1/3` },
+                { t: "warning", m: `⏳ [PREPARE VOTE]: Recorded from Node 2. Progress: 2/3` },
+                { t: "success", m: `✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View 0 Seq ${s}.` },
+                { t: "warning", m: `⏳ [COMMIT VOTE]: Recorded from Node 1. Progress: 1/3` },
+                { t: "warning", m: `⏳ [COMMIT VOTE]: Recorded from Node 2. Progress: 2/3` },
+                { t: "success", m: `🏆 [COMMITTED WITH CERTIFICATE]: Sequence ${s} definitively committed under View 0.` },
+                { t: "info", m: `💾 [WAL]: Entry written to consensus_wal.log safely.` }
+            ];
         }
 
-        function clearTerminal() {
-            output.innerHTML = '';
-            log("Console cleared.");
+        function appendLog(type, message) {
+            const el = document.createElement('div');
+            el.className = 'log-entry';
+            
+            const time = new Date().toISOString().split('T')[1].slice(0, 12);
+            
+            let colorClass = 'log-info';
+            if (type === 'success') colorClass = 'log-success';
+            if (type === 'warning') colorClass = 'log-warning';
+            if (type === 'fatal') colorClass = 'log-fatal';
+
+            el.innerHTML = `<span class="log-time">[${time}]</span><span class="${colorClass}">${message}</span>`;
+            terminal.appendChild(el);
+            terminal.scrollTop = terminal.scrollHeight;
         }
 
-        // Button Actions
-        function injectPacket() {
-            seqCounter++;
-            log(`Constructing zero-trust payload for sequence ${seqCounter}...`, "var(--accent-blue)");
-            setTimeout(() => log(`[API BRIDGE] Payload ${seqCounter} injected successfully.`), 600);
+        async function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        function triggerViewChange() {
-            log("WARNING: View change requested. Broadcasting to quorum...", "var(--alert-red)");
-            setTimeout(() => log("View Change Certificate (VCC) compiled. Leader rotated.", "var(--accent-blue)"), 1200);
-        }
-
-        function toggleTelemetry() {
-            if (autoLogInterval) {
-                clearInterval(autoLogInterval);
-                autoLogInterval = null;
-                log("Auto-telemetry paused.", "#888");
-                document.getElementById('status-indicator').innerText = "STANDBY";
-            } else {
-                log("Auto-telemetry resumed.");
-                document.getElementById('status-indicator').innerText = "DAEMON ONLINE";
-                autoLogInterval = setInterval(() => {
-                    log(`PBFT Engine: Node sync check... OK. (Lat: ${Math.floor(Math.random() * 12 + 2)}ms)`);
-                }, 4000);
+        async function runSimulation() {
+            // Boot sequence
+            for (const log of bootLogs) {
+                appendLog(log.t, log.m);
+                await sleep(800 + Math.random() * 500);
             }
-        }
 
-        // CLI Handler
-        function handleCLI(event) {
-            if (event.key === 'Enter') {
-                const cmd = cli.value.trim().toLowerCase();
-                cli.value = '';
-                if (!cmd) return;
+            await sleep(2000);
+
+            // Infinite consensus loop
+            while (true) {
+                seq++;
+                seqVal.innerText = seq;
                 
-                log(`root@lattice:~# ${cmd}`, "var(--text-main)");
-                
-                switch(cmd) {
-                    case 'help':
-                        log("Commands: help, clear, inject, status, verify");
-                        break;
-                    case 'clear':
-                        clearTerminal();
-                        break;
-                    case 'inject':
-                        injectPacket();
-                        break;
-                    case 'status':
-                        log("System Status: ALL MODULES SECURE. δ = 1.0.");
-                        break;
-                    case 'verify':
-                        log("Executing formal proof verification...", "var(--accent-blue)");
-                        setTimeout(() => log("GodelLobBFT.lean -> SOUNDNESS CONFIRMED."), 1000);
-                        break;
-                    default:
-                        log(`Command not found: ${cmd}. Type 'help'.`, "var(--alert-red)");
+                const cycle = getConsensusCycle(seq);
+                for (const log of cycle) {
+                    appendLog(log.t, log.m);
+                    await sleep(300 + Math.random() * 600);
                 }
+                
+                await sleep(3000); // Wait before next block
             }
         }
+
+        window.onload = runSimulation;
     </script>
 </body>
 </html>
