@@ -1,13 +1,10 @@
-pub mod pbft_state;
-pub mod quorum_tracker;
-pub mod consensus_engine;
-pub mod network;
-pub mod threshold_bls;
 pub mod pbft;
 pub mod wal;
+pub mod threshold_bls;
+pub mod network;
 
 #[cfg(test)]
-mod fuzz_tests;
+pub mod fuzz_tests;
 
 #[cfg(test)]
-mod stateful_fuzz;
+pub mod stateful_fuzz;
