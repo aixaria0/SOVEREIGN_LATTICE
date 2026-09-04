@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::Mutex;
-use crate::pbft::PbftState;
+use crate::pbft::{PbftMessage, PbftState};
 
 pub struct NetworkNode {
     pub node_id: u32,
@@ -86,8 +86,16 @@ where
 }
 
 impl MessageHandler for Arc<Mutex<PbftState>> {
-    fn handle(&self, _sender_id: u32, _payload: Vec<u8>) {
-        // Dispatches incoming serialized bytes into state if needed
+    fn handle(&self, sender_id: u32, payload: Vec<u8>) {
+        let state_arc = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Ok(msg) = PbftMessage::from_bytes(&payload) {
+                let mut state = state_arc.lock().await;
+                if msg.sender_id == sender_id {
+                    let _ = state.handle_message(&msg);
+                }
+            }
+        });
     }
 }
 
