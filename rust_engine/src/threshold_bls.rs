@@ -1,27 +1,19 @@
 use std::collections::HashMap;
 use bls12_381::{G1Projective, G2Projective, Scalar};
 use ff::Field;
-use sha2::{Sha256, Digest};
+use sha2::{Sha512, Digest};
 use group::Curve;
 
 pub fn hash_to_scalar(msg: &[u8], dst: &[u8]) -> Scalar {
-    let mut counter = 0u32;
-    loop {
-        let mut hasher = Sha256::new();
-        hasher.update(dst);
-        hasher.update(msg);
-        hasher.update(&counter.to_le_bytes());
-        let hash = hasher.finalize();
-        
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&hash);
-        
-        let scalar_opt = Scalar::from_bytes(&bytes);
-        if bool::from(scalar_opt.is_some()) {
-            return scalar_opt.unwrap();
-        }
-        counter += 1;
-    }
+    let mut hasher = Sha512::new();
+    hasher.update(dst);
+    hasher.update(msg);
+    let hash = hasher.finalize();
+    
+    let mut wide_bytes = [0u8; 64];
+    wide_bytes.copy_from_slice(&hash);
+    
+    Scalar::from_bytes_wide(&wide_bytes)
 }
 
 pub fn lagrange_basis_at_zero(i: u32, participants: &[u32]) -> Scalar {
@@ -73,6 +65,10 @@ pub fn reconstruct_threshold_public_key(
     threshold: usize,
     participants: &[u32]
 ) -> Result<G2Projective, &'static str> {
+    if participants.len() < threshold {
+        return Err("THRESHOLD_NOT_MET");
+    }
+    
     let mut master_pk = G2Projective::identity();
 
     for &i in participants {
