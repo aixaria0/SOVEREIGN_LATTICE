@@ -20,28 +20,28 @@ async fn main() -> std::io::Result<()> {
         .parse()
         .expect("Invalid BIND_ADDR");
 
-    // Standard local 4-node topology map
     let mut peers: HashMap<u32, SocketAddr> = HashMap::new();
     peers.insert(0, "127.0.0.1:8080".parse().unwrap());
     peers.insert(1, "127.0.0.1:8081".parse().unwrap());
     peers.insert(2, "127.0.0.1:8082".parse().unwrap());
     peers.insert(3, "127.0.0.1:8083".parse().unwrap());
 
-    // Initialize dummy cryptographic keys for the 4 nodes
     let mut public_keys = HashMap::new();
     for i in 0..4 {
         public_keys.insert(i, G2Projective::generator());
     }
 
-    // Initialize PBFT State Machine
-    let state = PbftState::new(4, public_keys).expect("Failed to initialize PBFT cluster");
+    // 🔴 فیکس اصلی: اضافه کردن master_pk برای پاس دادن به PbftState
+    let master_pk = G2Projective::generator(); 
+
+    // پاس دادن هر ۳ آرگومان به متد جدید
+    let state = PbftState::new(4, public_keys, master_pk).expect("Failed to initialize PBFT cluster");
     let state_clone = Arc::new(Mutex::new(state));
 
     let _network = Arc::new(NetworkNode::new(node_id, bind_addr, peers.clone()));
 
     println!("🟢 Starting SOVEREIGN_LATTICE Node {}", node_id);
     
-    // FIX: Passing all 3 required arguments to match the network.rs signature
     start_tcp_listener(bind_addr, state_clone, peers).await?;
 
     Ok(())
