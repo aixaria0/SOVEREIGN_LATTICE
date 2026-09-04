@@ -311,7 +311,6 @@ pub struct PbftState {
     registered_nodes: HashSet<u32>,
     pub public_keys: HashMap<u32, G2Projective>,
     wal: WriteAheadLog,
-    // [NEW]: Persistent lock enforcing NoEquivocationAcrossViews safety invariant
     pub locked_digests: HashMap<u64, [u8; 32]>, 
 }
 
@@ -378,7 +377,6 @@ impl PbftState {
                         let cert = PreparedCertificate { view: prep_view, seq, digest, signatures: sigs.clone() };
                         if cert.verify(quorum_size, &initial_public_keys) {
                             recovered_certificates.insert((prep_view, seq), cert);
-                            // Recover lock for sequence safely prepared
                             recovered_locked_digests.insert(seq, digest);
                         }
                     }
@@ -439,7 +437,6 @@ impl PbftState {
                             };
                             if nv_cert.verify(quorum_size, &initial_public_keys) {
                                 recovered_new_view_certificates.insert(view, nv_cert);
-                                // Recover lock inherited via view change
                                 if let Some(ref b_cert) = bound_cert {
                                     recovered_locked_digests.insert(b_cert.seq, b_cert.digest);
                                 }
@@ -514,11 +511,6 @@ impl PbftState {
                     return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to a GLOBALLY committed block!");
                 }
 
-                // =========================================================================
-                // [NEW SAFETY ENFORCEMENT]: Reject multi-view equivocation directly here!
-                // If the sequence was locked to a digest in ANY previous view, 
-                // the new PrePrepare MUST use exactly that same digest.
-                // =========================================================================
                 if let Some(locked_digest) = self.locked_digests.get(&msg.seq) {
                     if locked_digest != &msg.digest {
                         return Err("SAFETY_VIOLATION: Malicious PrePrepare! This sequence is permanently locked to a different digest from a previous view.");
@@ -550,6 +542,13 @@ impl PbftState {
                     return Err("VIEW_MISMATCH: Prepare view does not match current consensus view!");
                 }
 
+                // =========================================================================
+                // [NEW SAFETY ENFORCEMENT]: Enforce local PreparedCertificate uniqueness
+                // =========================================================================
+                if self.prepared_certificates.contains_key(&(msg.view, msg.seq)) {
+                    return Err("CERTIFICATE_ALREADY_FORMED: A PreparedCertificate for this sequence is already locked. Redundant votes rejected to prevent certificate equivocation.");
+                }
+
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 if !self.pre_prepared_proposals.contains(&proposal_key) {
                     return Err("PREPARE_WITHOUT_PREPREPARE: Prepare rejected; no valid PrePrepare exists for this digest.");
@@ -578,11 +577,6 @@ impl PbftState {
                     }
 
                     self.prepared_certificates.insert((msg.view, msg.seq), cert);
-
-                    // =========================================================================
-                    // [NEW SAFETY ENFORCEMENT]: Lock the sequence to this digest
-                    // Once a quorum is achieved in this view, we bind this sequence safely.
-                    // =========================================================================
                     self.locked_digests.insert(msg.seq, msg.digest);
 
                     format!("✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}. SEQUENCE LOCKED.", msg.view, msg.seq)
@@ -594,6 +588,13 @@ impl PbftState {
             Phase::Commit => {
                 if msg.view != self.current_view {
                     return Err("VIEW_MISMATCH: Commit view does not match current consensus view!");
+                }
+
+                // =========================================================================
+                // [NEW SAFETY ENFORCEMENT]: Enforce local CommitCertificate uniqueness
+                // =========================================================================
+                if self.commit_certificates.contains_key(&(msg.view, msg.seq)) {
+                    return Err("CERTIFICATE_ALREADY_FORMED: A CommitCertificate for this sequence is already locked. Redundant votes rejected to prevent certificate equivocation.");
                 }
 
                 let has_valid_certificate = self.prepared_certificates
@@ -652,6 +653,13 @@ impl PbftState {
     }
 
     pub fn handle_view_change_payload(&mut self, vc: &ViewChangePayload) -> Result<String, &'static str> {
+        // =========================================================================
+        // [NEW SAFETY ENFORCEMENT]: Enforce local NewViewCertificate uniqueness
+        // =========================================================================
+        if self.new_view_certificates.contains_key(&vc.target_view) {
+            return Err("CERTIFICATE_ALREADY_FORMED: A NewViewCertificate for this target view is already locked locally. Redundant payloads rejected.");
+        }
+
         if !self.registered_nodes.contains(&vc.sender_id) {
             return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
         }
@@ -744,11 +752,6 @@ impl PbftState {
             self.current_view = vc.target_view;
             if let Some(ref cert) = bound_cert {
                 self.highest_seq = self.highest_seq.max(cert.seq);
-                // =========================================================================
-                // [NEW SAFETY ENFORCEMENT]: Inherit lock on view change
-                // If a sequence had a Prepared Certificate from a previous view, 
-                // this state transition firmly binds and locks the state machine to it!
-                // =========================================================================
                 self.locked_digests.insert(cert.seq, cert.digest);
             }
             self.new_view_certificates.insert(vc.target_view, new_view_cert);
@@ -864,3 +867,4 @@ mod adversarial_tests {
         assert_eq!(state.current_view, 0, "Engine should remain in view 0 because all ViewChange claims were maliciously forged!");
     }
 }
+
