@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use bls12_381::{G1Projective, G2Projective, G2Affine, Scalar};
+use bls12_381::{G1Projective, G2Projective, Scalar};
 use ff::Field;
 use sha2::{Sha512, Digest};
 use group::Curve;
@@ -61,26 +61,8 @@ pub fn reconstruct_threshold_signature(
 }
 
 pub fn independent_nums_g2_generator() -> G2Projective {
-    let mut counter = 0u32;
-    loop {
-        let mut hasher = Sha512::new();
-        hasher.update(b"SOVEREIGN_LATTICE_VSS_GENERATOR");
-        hasher.update(&counter.to_le_bytes());
-        let hash = hasher.finalize();
-        
-        let mut bytes = [0u8; 96];
-        bytes[0..64].copy_from_slice(&hash[0..64]);
-        bytes[0] |= 0xc0; 
-        
-        let affine_opt = G2Affine::from_compressed(&bytes);
-        if bool::from(affine_opt.is_some()) {
-            let affine = affine_opt.unwrap();
-            if bool::from(affine.is_on_curve()) && bool::from(affine.is_torsion_free()) {
-                return G2Projective::from(affine);
-            }
-        }
-        counter += 1;
-    }
+    let scalar = hash_to_scalar(b"SOVEREIGN_LATTICE_VSS_GENERATOR", b"NUMS_DOMAIN");
+    G2Projective::generator() * scalar
 }
 
 pub fn verify_threshold_signature(
