@@ -10,6 +10,8 @@ pub struct View(pub u64);
 pub struct NodeState {
     pub prepared: HashMap<(View, u64), Digest>,
     pub committed: HashMap<(View, u64), Digest>,
+    // Persistent lock to prevent cross-view equivocation
+    pub locked_digests: HashMap<u64, Digest>, 
 }
 
 impl NodeState {
@@ -18,7 +20,16 @@ impl NodeState {
     }
 
     pub fn mark_prepared(&mut self, view: View, seq: u64, digest: Digest) -> Result<(), &'static str> {
+        // Critical safety check: if this sequence is already locked, the new digest must match exactly
+        if let Some(locked_digest) = self.locked_digests.get(&seq) {
+            if locked_digest != &digest {
+                return Err("Safety Violation: Sequence is already locked to a different digest in a previous view");
+            }
+        }
+
         self.prepared.insert((view, seq), digest);
+        // Once prepared, we lock it to this digest permanently
+        self.locked_digests.insert(seq, digest);
         Ok(())
     }
 
@@ -29,6 +40,12 @@ impl NodeState {
 
     pub fn is_committed(&self, view: View, seq: u64, digest: &Digest) -> bool {
         self.committed.get(&(view, seq)) == Some(digest)
+    }
+
+    // Added this method so we can firmly lock inherited digests later in pbft.rs
+    // when we verify the NewView certificate
+    pub fn inherit_lock(&mut self, seq: u64, digest: Digest) {
+        self.locked_digests.insert(seq, digest);
     }
 }
 
