@@ -21,12 +21,13 @@ impl DkgSession {
             coefficients.push(Scalar::random(&mut OsRng));
         }
 
-        let x = Scalar::from(node_id as u64);
+        // Map node_id to a 1-indexed domain (x != 0) to protect constant coefficient a_0
+        let evaluation_point = Scalar::from((node_id + 1) as u64);
         let mut my_secret_share = Scalar::zero();
         let mut x_pow = Scalar::one();
         for coeff in &coefficients {
             my_secret_share += *coeff * x_pow;
-            x_pow *= x;
+            x_pow *= evaluation_point;
         }
 
         Self {
@@ -48,12 +49,13 @@ impl DkgSession {
     }
 
     pub fn evaluate_share_for(&self, recipient_id: u32) -> Scalar {
-        let x = Scalar::from(recipient_id as u64);
+        // Ensure recipient evaluation uses the exact same 1-indexed domain
+        let evaluation_point = Scalar::from((recipient_id + 1) as u64);
         let mut evaluation = Scalar::zero();
         let mut x_pow = Scalar::one();
         for coeff in &self.my_secret_polynomial_coefficients {
             evaluation += *coeff * x_pow;
-            x_pow *= x;
+            x_pow *= evaluation_point;
         }
         evaluation
     }
@@ -77,9 +79,16 @@ impl DkgSession {
         Ok(())
     }
 
-    pub fn finalize_dkg(&self) -> Result<(Scalar, G2Projective), &'static str> {
+    pub fn finalize_dkg(&self, expected_participants: &[u32]) -> Result<(Scalar, G2Projective), &'static str> {
         if self.received_shares.len() < self.threshold {
             return Err("INSUFFICIENT_SHARES: DKG session lacks enough verified shares to finalize.");
+        }
+
+        // Enforce strict consensus alignment on the qualified dealer set to guarantee identical master keys
+        for &participant_id in expected_participants {
+            if participant_id != self.node_id && !self.received_shares.contains_key(&participant_id) {
+                return Err("DTS_MISMATCH: Missing verified share from an expected network participant.");
+            }
         }
 
         let mut aggregated_secret_share = self.my_secret_share;
@@ -93,7 +102,6 @@ impl DkgSession {
                 master_pk += *c0;
             }
         }
-        // Include our own constant coefficient commitment (C_0)
         if let Some(my_c0) = self.generate_commitments().first() {
             master_pk += *my_c0;
         }
@@ -101,4 +109,3 @@ impl DkgSession {
         Ok((aggregated_secret_share, master_pk))
     }
 }
-
