@@ -228,7 +228,6 @@ impl NewViewCertificate {
             return false;
         }
 
-        // Safe indexing avoids destructuring move errors
         let max_prep_view = self.view_change_votes.values().map(|v| v.0).max().unwrap_or(0);
         let max_seq_at_max_view = self.view_change_votes.values()
             .filter(|v| v.0 == max_prep_view)
@@ -328,7 +327,6 @@ impl PbftState {
             }
         }
 
-        // Fix File Contention: Guarantee perfectly unique files for parallel cluster simulations
         let wal_path = if cfg!(test) {
             let count = TEST_WAL_COUNTER.fetch_add(1, Ordering::SeqCst);
             format!("consensus_wal_test_{}_{:?}.log", count, std::thread::current().id())
@@ -353,7 +351,6 @@ impl PbftState {
         wal.replay_log(|view, seq_or_packed, phase_u8, sender_id, digest, signature| {
             if view > recovered_view { recovered_view = view; }
             
-            // P0 FIX: Safely unpack the state based on the exact consensus phase
             let (prep_view, seq) = if phase_u8 == Phase::ViewChange as u8 {
                 (seq_or_packed >> 32, seq_or_packed & 0xFFFFFFFF)
             } else {
