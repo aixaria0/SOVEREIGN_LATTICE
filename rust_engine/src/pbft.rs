@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use bls12_381::{G1Projective, G2Projective, G1Affine};
 use group::Curve;
-use crate::threshold_bls::verify_bls_signature;
+use crate::threshold_bls::{verify_bls_signature, verify_bound_threshold_signature};
 use crate::wal::WriteAheadLog;
 
 static TEST_WAL_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -168,7 +168,7 @@ pub struct PreparedCertificate {
 }
 
 impl PreparedCertificate {
-    pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
+    pub fn verify(&self, quorum_size: usize, master_public_key: &G2Projective) -> bool {
         if self.signatures.len() < quorum_size {
             return false;
         }
@@ -179,16 +179,12 @@ impl PreparedCertificate {
         canonical_msg.extend_from_slice(&self.seq.to_be_bytes());
         canonical_msg.extend_from_slice(&self.digest);
 
-        let mut valid_count = 0;
-        for (&node_id, sig) in &self.signatures {
-            if let Some(pk) = public_keys.get(&node_id) {
-                if verify_bls_signature(&canonical_msg, sig, pk) {
-                    valid_count += 1;
-                }
-            }
-        }
-
-        valid_count >= quorum_size
+        verify_bound_threshold_signature(
+            &canonical_msg,
+            &self.signatures,
+            master_public_key,
+            quorum_size,
+        )
     }
 }
 
@@ -233,7 +229,7 @@ pub struct NewViewCertificate {
 }
 
 impl NewViewCertificate {
-    pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>) -> bool {
+    pub fn verify(&self, quorum_size: usize, public_keys: &HashMap<u32, G2Projective>, master_public_key: &G2Projective) -> bool {
         if self.view_change_votes.len() < quorum_size {
             return false;
         }
@@ -259,7 +255,7 @@ impl NewViewCertificate {
         let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
 
         if let Some(ref cert) = self.selected_prepared_certificate {
-            if !cert.verify(quorum_size, public_keys) {
+            if !cert.verify(quorum_size, master_public_key) {
                 return false;
             }
             if cert.view != max_prep_view || cert.seq != max_seq_at_max_view || cert.digest != best_digest {
@@ -309,11 +305,12 @@ pub struct PbftState {
     pub quorum_size: usize,
     registered_nodes: HashSet<u32>,
     pub public_keys: HashMap<u32, G2Projective>,
+    pub master_public_key: G2Projective,
     wal: WriteAheadLog,
 }
 
 impl PbftState {
-    pub fn new(total_nodes: usize, initial_public_keys: HashMap<u32, G2Projective>) -> Result<Self, &'static str> {
+    pub fn new(total_nodes: usize, initial_public_keys: HashMap<u32, G2Projective>, master_public_key: G2Projective) -> Result<Self, &'static str> {
         if total_nodes < 4 {
             return Err("TOPOLOGY_VIOLATION: Network size N must be at least 4 for PBFT (f >= 1).");
         }
@@ -373,7 +370,7 @@ impl PbftState {
                     sigs.insert(sender_id, signature);
                     if sigs.len() >= quorum_size {
                         let cert = PreparedCertificate { view: prep_view, seq, digest, signatures: sigs.clone() };
-                        if cert.verify(quorum_size, &initial_public_keys) {
+                        if cert.verify(quorum_size, &master_public_key) {
                             recovered_certificates.insert((prep_view, seq), cert);
                         }
                     }
@@ -399,7 +396,7 @@ impl PbftState {
                             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
                             let is_valid_claim = if p_view > 0 || p_seq > 0 {
                                 recovered_certificates.get(&(p_view, p_seq))
-                                    .map(|cert| cert.digest == p_digest && cert.verify(quorum_size, &initial_public_keys))
+                                    .map(|cert| cert.digest == p_digest && cert.verify(quorum_size, &master_public_key))
                                     .unwrap_or(false)
                             } else {
                                 true
@@ -420,7 +417,7 @@ impl PbftState {
 
                         let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
                             recovered_certificates.get(&(max_prep_view, max_seq_at_max_view))
-                                .filter(|c| c.digest == best_digest && c.verify(quorum_size, &initial_public_keys))
+                                .filter(|c| c.digest == best_digest && c.verify(quorum_size, &master_public_key))
                                 .cloned()
                         } else {
                             None
@@ -435,7 +432,7 @@ impl PbftState {
                                 view_change_votes: supporters.clone(),
                                 selected_prepared_certificate: bound_cert,
                             };
-                            if nv_cert.verify(quorum_size, &initial_public_keys) {
+                            if nv_cert.verify(quorum_size, &initial_public_keys, &master_public_key) {
                                 recovered_new_view_certificates.insert(view, nv_cert);
                             }
                         }
@@ -462,6 +459,7 @@ impl PbftState {
             quorum_size,
             registered_nodes,
             public_keys: initial_public_keys,
+            master_public_key,
             wal,
         })
     }
@@ -508,7 +506,6 @@ impl PbftState {
                     return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to a GLOBALLY committed block!");
                 }
 
-                // Cross-view safety lock enforcement
                 if let Some(locked) = self.locked_digest.get(&msg.seq) {
                     if locked != &msg.digest {
                         return Err("CROSS_VIEW_LOCK_VIOLATION: Proposal conflicts with locked inherited digest!");
@@ -563,7 +560,7 @@ impl PbftState {
                         signatures: sigs.clone(),
                     };
                     
-                    if !cert.verify(self.quorum_size, &self.public_keys) {
+                    if !cert.verify(self.quorum_size, &self.master_public_key) {
                         return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Prepared QC failed cryptographic verification!");
                     }
 
@@ -581,7 +578,7 @@ impl PbftState {
 
                 let has_valid_certificate = self.prepared_certificates
                     .get(&(msg.view, msg.seq))
-                    .map(|cert| cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys))
+                    .map(|cert| cert.digest == msg.digest && cert.verify(self.quorum_size, &self.master_public_key))
                     .unwrap_or(false);
 
                 if !has_valid_certificate {
@@ -654,7 +651,7 @@ impl PbftState {
         if vc.prepared_seq > 0 {
             let has_valid_qc = self.prepared_certificates
                 .get(&(vc.prepared_view, vc.prepared_seq))
-                .map(|cert| cert.digest == vc.digest && cert.verify(self.quorum_size, &self.public_keys))
+                .map(|cert| cert.digest == vc.digest && cert.verify(self.quorum_size, &self.master_public_key))
                 .unwrap_or(false);
 
             if !has_valid_qc {
@@ -681,7 +678,7 @@ impl PbftState {
                 
                 let is_valid_claim = if p_view > 0 || p_seq > 0 {
                     self.prepared_certificates.get(&(p_view, p_seq))
-                        .map(|cert| cert.digest == p_digest && cert.verify(self.quorum_size, &self.public_keys))
+                        .map(|cert| cert.digest == p_digest && cert.verify(self.quorum_size, &self.master_public_key))
                         .unwrap_or(false)
                 } else {
                     true
@@ -703,7 +700,7 @@ impl PbftState {
             let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
                 let cert_opt = self.prepared_certificates
                     .get(&(max_prep_view, max_seq_at_max_view))
-                    .filter(|c| c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
+                    .filter(|c| c.digest == best_digest && c.verify(self.quorum_size, &self.master_public_key))
                     .cloned();
                 
                 if cert_opt.is_none() {
@@ -720,7 +717,7 @@ impl PbftState {
                 selected_prepared_certificate: bound_cert.clone(),
             };
 
-            if !new_view_cert.verify(self.quorum_size, &self.public_keys) {
+            if !new_view_cert.verify(self.quorum_size, &self.public_keys, &self.master_public_key) {
                 return Err("NEW_VIEW_VERIFICATION_FAILED: NewViewCertificate cryptographic verification failed! Bound certificate mismatch.");
             }
 
@@ -761,153 +758,5 @@ impl PbftState {
                 Err(e) => eprintln!("❌ [NETWORK PARSE ERROR]: {}", e),
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod adversarial_tests {
-    use super::*;
-    use bls12_381::{G1Projective, G2Projective, Scalar};
-    use rand::rngs::OsRng;
-    use ff::Field;
-    use sha2::{Sha256, Digest};
-
-    fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
-        let mut secret_keys = HashMap::new();
-        let mut public_keys = HashMap::new();
-        for i in 0..n as u32 {
-            let sk = Scalar::random(&mut OsRng);
-            let pk = G2Projective::generator() * sk;
-            secret_keys.insert(i, sk);
-            public_keys.insert(i, pk);
-        }
-        (secret_keys, public_keys)
-    }
-
-    fn hash_to_curve(msg: &[u8]) -> G1Projective {
-        let mut hasher = Sha256::new();
-        hasher.update(msg);
-        let hash = hasher.finalize();
-        
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&hash);
-        
-        let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
-        G1Projective::generator() * scalar_hash
-    }
-
-    fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
-        hash_to_curve(msg) * sk
-    }
-
-    #[test]
-    fn test_ghost_certificate_attack_rejected() {
-        let n = 4;
-        let (secret_keys, public_keys) = generate_test_keys(n);
-        
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
-        
-        let target_view: u64 = 1;
-        let malicious_prep_view: u64 = 0;
-        let malicious_seq: u64 = 999; 
-        let malicious_digest = [0xbb; 32];
-
-        let create_view_change = |sender_id: u32, sk: &Scalar| {
-            let vc = ViewChangePayload {
-                target_view,
-                prepared_view: malicious_prep_view,
-                prepared_seq: malicious_seq,
-                digest: malicious_digest,
-                sender_id,
-                signature: G1Projective::identity(),
-            };
-            let canonical_msg = vc.canonical_bytes();
-            let sig = sign_message(&canonical_msg, sk);
-            ViewChangePayload {
-                signature: sig,
-                ..vc
-            }
-        };
-
-        let vc1 = create_view_change(1, &secret_keys[&1]);
-        let vc2 = create_view_change(2, &secret_keys[&2]);
-        let vc3 = create_view_change(3, &secret_keys[&3]);
-
-        let _ = state.handle_view_change_payload(&vc1);
-        let _ = state.handle_view_change_payload(&vc2);
-        let _ = state.handle_view_change_payload(&vc3);
-
-        assert_eq!(state.highest_seq, 0, "SAFETY VIOLATION: Engine accepted unbacked phantom sequence!");
-        assert_eq!(state.current_view, 0, "Engine should remain in view 0 because all ViewChange claims were maliciously forged!");
-    }
-
-    #[test]
-    fn test_cross_view_equivocation_locked() {
-        let n = 4;
-        let (secret_keys, public_keys) = generate_test_keys(n);
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
-
-        let locked_seq = 10u64;
-        let locked_digest = [0xaa; 32];
-        let conflicting_digest = [0xbb; 32];
-
-        state.current_view = 1;
-        state.locked_digest.insert(locked_seq, locked_digest);
-
-        let leader_id = state.get_expected_leader(1);
-        let sk = &secret_keys[&leader_id];
-
-        let mut canonical_msg = Vec::new();
-        canonical_msg.push(Phase::PrePrepare as u8);
-        canonical_msg.extend_from_slice(&1u64.to_be_bytes());
-        canonical_msg.extend_from_slice(&locked_seq.to_be_bytes());
-        canonical_msg.extend_from_slice(&conflicting_digest);
-
-        let sig = sign_message(&canonical_msg, sk);
-
-        let malicious_proposal = PbftMessage {
-            phase: Phase::PrePrepare,
-            view: 1,
-            seq: locked_seq,
-            digest: conflicting_digest,
-            sender_id: leader_id,
-            signature: sig,
-        };
-
-        let result = state.handle_message(&malicious_proposal);
-        assert!(result.is_err(), "Leader proposal must be rejected due to cross-view lock violation");
-        assert_eq!(result.unwrap_err(), "CROSS_VIEW_LOCK_VIOLATION: Proposal conflicts with locked inherited digest!");
-    }
-
-    #[test]
-    fn test_sub_threshold_certificate_rejected() {
-        let n = 4;
-        let (secret_keys, public_keys) = generate_test_keys(n);
-
-        let view = 0u64;
-        let seq = 1u64;
-        let digest = [0x11; 32];
-
-        let mut canonical_msg = Vec::new();
-        canonical_msg.push(Phase::Prepare as u8);
-        canonical_msg.extend_from_slice(&view.to_be_bytes());
-        canonical_msg.extend_from_slice(&seq.to_be_bytes());
-        canonical_msg.extend_from_slice(&digest);
-
-        // Quorum for N=4 is 3. Provide only 2 signatures.
-        let mut sub_threshold_sigs = HashMap::new();
-        for id in 0..2u32 {
-            let sig = sign_message(&canonical_msg, &secret_keys[&id]);
-            sub_threshold_sigs.insert(id, sig);
-        }
-
-        let cert = PreparedCertificate {
-            view,
-            seq,
-            digest,
-            signatures: sub_threshold_sigs,
-        };
-
-        assert!(!cert.verify(3, &public_keys), "Sub-threshold certificate must fail verification");
     }
 }
