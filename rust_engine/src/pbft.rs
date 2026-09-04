@@ -798,6 +798,9 @@ mod adversarial_tests {
         let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
         
         let target_view: u64 = 1;
+        
+        // Attack scenario: Nodes send a malicious ViewChange with a massive sequence number
+        // but they have no cryptographic proof (PreparedCertificate) that this sequence exists.
         let malicious_prep_view: u64 = 0;
         let malicious_seq: u64 = 999; 
         let malicious_digest = [0xbb; 32];
@@ -822,48 +825,13 @@ mod adversarial_tests {
         let vc1 = create_view_change(1, &secret_keys[&1]);
         let vc2 = create_view_change(2, &secret_keys[&2]);
         let vc3 = create_view_change(3, &secret_keys[&3]);
-        
-        let supporters = state.view_change_votes.entry(target_view).or_default();
-        supporters.insert(1, (malicious_prep_view, malicious_seq, malicious_digest, vc1.signature));
-        supporters.insert(2, (malicious_prep_view, malicious_seq, malicious_digest, vc2.signature));
-        supporters.insert(3, (malicious_prep_view, malicious_seq, malicious_digest, vc3.signature));
 
-        let mut highest_valid_claim: Option<(u64, u64, [u8; 32])> = None;
+        let _ = state.handle_view_change_payload(&vc1);
+        let _ = state.handle_view_change_payload(&vc2);
+        let _ = state.handle_view_change_payload(&vc3);
 
-        for v in supporters.values() {
-            let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-            let is_valid_claim = if p_view > 0 || p_seq > 0 {
-                state.prepared_certificates.get(&(p_view, p_seq))
-                    .map(|cert| cert.digest == p_digest && cert.verify(state.quorum_size, &state.public_keys))
-                    .unwrap_or(false)
-            } else {
-                true
-            };
-
-            if is_valid_claim {
-                if let Some(current) = highest_valid_claim {
-                    if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
-                        highest_valid_claim = Some((p_view, p_seq, p_digest));
-                    }
-                } else {
-                    highest_valid_claim = Some((p_view, p_seq, p_digest));
-                }
-            }
-        }
-
-        let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
-
-        let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
-            state.prepared_certificates
-                .get(&(max_prep_view, max_seq_at_max_view))
-                .filter(|c| c.digest == best_digest && c.verify(state.quorum_size, &state.public_keys))
-                .cloned()
-        } else {
-            None
-        };
-
-        assert!(bound_cert.is_none(), "Node 0 magically found a ghost certificate!");
-        let is_rejected = bound_cert.is_none() && (max_prep_view > 0 || max_seq_at_max_view > 0);
-        assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
+        // Assert that the engine safely filtered the malicious sequence and defaulted to 0
+        assert_eq!(state.highest_seq, 0, "SAFETY VIOLATION: Engine accepted unbacked phantom sequence!");
+        assert_eq!(state.current_view, 1, "Engine failed to transition to the next view safely!");
     }
 }
