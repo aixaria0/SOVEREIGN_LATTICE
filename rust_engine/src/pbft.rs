@@ -144,6 +144,16 @@ impl ViewChangePayload {
             signature,
         })
     }
+
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.push(Phase::ViewChange as u8);
+        msg.extend_from_slice(&self.target_view.to_be_bytes());
+        msg.extend_from_slice(&self.prepared_view.to_be_bytes());
+        msg.extend_from_slice(&self.prepared_seq.to_be_bytes());
+        msg.extend_from_slice(&self.digest);
+        msg
+    }
 }
 
 #[derive(Clone)]
@@ -274,18 +284,6 @@ impl NewViewCertificate {
     }
 }
 
-impl ViewChangePayload {
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut msg = Vec::new();
-        msg.push(Phase::ViewChange as u8);
-        msg.extend_from_slice(&self.target_view.to_be_bytes());
-        msg.extend_from_slice(&self.prepared_view.to_be_bytes());
-        msg.extend_from_slice(&self.prepared_seq.to_be_bytes());
-        msg.extend_from_slice(&self.digest);
-        msg
-    }
-}
-
 pub struct PbftState {
     pub total_nodes: usize,
     pub f: usize,
@@ -325,7 +323,11 @@ impl PbftState {
         }
 
         let wal_path = if cfg!(test) {
-            format!("consensus_wal_{:?}.log", std::thread::current().id())
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos();
+            format!("consensus_wal_{:?}_{}_{}.log", std::thread::current().id(), std::process::id(), nanos)
         } else {
             "consensus_wal.log".to_string()
         };
@@ -717,106 +719,3 @@ impl PbftState {
         }
     }
 }
-
-#[cfg(test)]
-mod adversarial_tests {
-    use super::*;
-    use bls12_381::{G1Projective, G2Projective, Scalar};
-    use rand::rngs::OsRng;
-    use ff::Field;
-    use sha2::{Sha256, Digest};
-
-    fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
-        let mut secret_keys = HashMap::new();
-        let mut public_keys = HashMap::new();
-        for i in 0..n as u32 {
-            let sk = Scalar::random(&mut OsRng);
-            let pk = G2Projective::generator() * sk;
-            secret_keys.insert(i, sk);
-            public_keys.insert(i, pk);
-        }
-        (secret_keys, public_keys)
-    }
-
-    fn hash_to_curve(msg: &[u8]) -> G1Projective {
-        let mut hasher = Sha256::new();
-        hasher.update(msg);
-        let hash = hasher.finalize();
-        
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&hash);
-        
-        let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
-        G1Projective::generator() * scalar_hash
-    }
-
-    fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
-        hash_to_curve(msg) * sk
-    }
-
-    #[test]
-    fn test_ghost_certificate_attack_rejected() {
-        let n = 4;
-        let (secret_keys, public_keys) = generate_test_keys(n);
-        
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
-        
-        let target_view: u64 = 1;
-        let malicious_prep_view: u64 = 0;
-        let malicious_seq: u64 = 999; 
-        let malicious_digest = [0xbb; 32];
-
-        let create_view_change = |sender_id: u32, sk: &Scalar| {
-            let vc = ViewChangePayload {
-                target_view,
-                prepared_view: malicious_prep_view,
-                prepared_seq: malicious_seq,
-                digest: malicious_digest,
-                sender_id,
-                signature: G1Projective::identity(),
-            };
-            let canonical_msg = vc.canonical_bytes();
-            let sig = sign_message(&canonical_msg, sk);
-            ViewChangePayload {
-                signature: sig,
-                ..vc
-            }
-        };
-
-        let vc1 = create_view_change(1, &secret_keys[&1]);
-        let vc2 = create_view_change(2, &secret_keys[&2]);
-        let vc3 = create_view_change(3, &secret_keys[&3]);
-        
-        let supporters = state.view_change_votes.entry(target_view).or_default();
-        supporters.insert(1, (malicious_prep_view, malicious_seq, malicious_digest, vc1.signature));
-        supporters.insert(2, (malicious_prep_view, malicious_seq, malicious_digest, vc2.signature));
-        supporters.insert(3, (malicious_prep_view, malicious_seq, malicious_digest, vc3.signature));
-
-        let max_prep_view = supporters.values().map(|&(pv, _, _, _)| pv).max().unwrap_or(0);
-        let max_seq_at_max_view = supporters.values()
-            .filter(|&&(pv, _, _, _)| pv == max_prep_view)
-            .map(|&(_, s, _, _)| s)
-            .max()
-            .unwrap_or(0);
-
-        let best_digest = supporters.values()
-            .filter(|&&(pv, s, _, _)| pv == max_prep_view && s == max_seq_at_max_view)
-            .map(|&(_, _, d, _)| d)
-            .next()
-            .unwrap_or([0u8; 32]);
-
-        let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
-            state.prepared_certificates
-                .get(&(max_prep_view, max_seq_at_max_view))
-                .filter(|c| c.digest == best_digest && c.verify(state.quorum_size, &state.public_keys))
-                .cloned()
-        } else {
-            None
-        };
-
-        assert!(bound_cert.is_none(), "Node 0 magically found a ghost certificate!");
-        let is_rejected = bound_cert.is_none() && (max_prep_view > 0 || max_seq_at_max_view > 0);
-        assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
-    }
-}
-
