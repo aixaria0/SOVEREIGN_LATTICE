@@ -1,10 +1,9 @@
-// File: tests/byzantine_cluster_integration.rs
-
 use std::collections::HashMap;
 use bls12_381::{G1Projective, G2Projective, Scalar};
 use rand::rngs::OsRng;
 use ff::Field;
-use sovereign_lattice::pbft_state::{PbftState, Phase, PbftMessage, ViewChangePayload};
+// FIXED: Changed pbft_state to pbft
+use sovereign_lattice::pbft::{PbftState, Phase, PbftMessage, ViewChangePayload};
 use sovereign_lattice::threshold_bls::hash_to_scalar;
 
 fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
@@ -20,7 +19,8 @@ fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Project
 }
 
 fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
-    let scalar_hash = hash_to_scalar(msg, b"TEST_SUITE_DOMAIN");
+    // FIXED: Matched the exact argument order (domain, msg) from threshold_bls
+    let scalar_hash = hash_to_scalar(b"TEST_SUITE_DOMAIN", msg);
     G1Projective::generator() * (scalar_hash * sk)
 }
 
@@ -28,7 +28,10 @@ fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
 fn test_new_view_certificate_rejects_unbacked_claims() {
     let n = 4;
     let (secret_keys, public_keys) = generate_test_keys(n);
-    let mut state = PbftState::new(n, public_keys.clone()).expect("Init failed");
+    
+    // FIXED: Generated a mock master public key to satisfy the new hardened PbftState::new signature
+    let master_pk = G2Projective::generator() * Scalar::random(&mut OsRng);
+    let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Init failed");
 
     // Attack Scenario: Byzantine node attempts to force View Change with an unbacked prepared_seq
     let create_forged_view_change = |sender_id: u32, sk: &Scalar| {
