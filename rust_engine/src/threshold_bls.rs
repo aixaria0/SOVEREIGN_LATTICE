@@ -42,13 +42,13 @@ pub fn lagrange_basis_at_zero(i: u32, participants: &[u32]) -> Scalar {
 
 pub fn reconstruct_threshold_signature(
     signatures: &HashMap<u32, G1Projective>,
-    threshold: usize
+    _threshold: usize
 ) -> Result<G1Projective, &'static str> {
-    if signatures.len() < threshold {
+    if signatures.len() < _threshold {
         return Err("THRESHOLD_NOT_MET");
     }
 
-    let participants: Vec<u32> = signatures.keys().copied().take(threshold).collect();
+    let participants: Vec<u32> = signatures.keys().copied().take(_threshold).collect();
     let mut master_sig = G1Projective::identity();
 
     for &i in &participants {
@@ -88,9 +88,9 @@ pub fn verify_threshold_signature(
     dst: &[u8], 
     signatures: &HashMap<u32, G1Projective>, 
     master_public_key: &G2Projective,
-    threshold: usize
+    _threshold: usize
 ) -> bool {
-    let master_sig = match reconstruct_threshold_signature(signatures, threshold) {
+    let master_sig = match reconstruct_threshold_signature(signatures, _threshold) {
         Ok(sig) => sig,
         Err(_) => return false,
     };
