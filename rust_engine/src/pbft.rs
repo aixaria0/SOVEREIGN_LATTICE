@@ -233,7 +233,7 @@ impl NewViewCertificate {
         for v in self.view_change_votes.values() {
             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
             let is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
-                .map_or(true, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
+                .map_or(false, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
 
             if is_valid_claim {
                 if let Some(current) = highest_valid_claim {
@@ -255,6 +255,8 @@ impl NewViewCertificate {
             if cert.view != max_prep_view || cert.seq != max_seq_at_max_view || cert.digest != best_digest {
                 return false;
             }
+        } else if max_prep_view > 0 || max_seq_at_max_view > 0 {
+            return false;
         }
 
         let mut valid_count = 0;
@@ -401,7 +403,7 @@ impl PbftState {
                             let is_valid_claim = if p_view > 0 || p_seq > 0 {
                                 recovered_certificates.get(&(p_view, p_seq))
                                     .map(|cert| cert.digest == p_digest && cert.verify(quorum_size, &initial_public_keys))
-                                    .unwrap_or(true)
+                                    .unwrap_or(false)
                             } else {
                                 true
                             };
@@ -427,7 +429,7 @@ impl PbftState {
                             None
                         };
 
-                        if (max_prep_view == 0 && max_seq_at_max_view == 0) || bound_cert.is_some() || max_prep_view > 0 {
+                        if (max_prep_view == 0 && max_seq_at_max_view == 0) || bound_cert.is_some() {
                             let nv_cert = NewViewCertificate {
                                 target_view: view,
                                 view_change_votes: supporters.clone(),
@@ -437,8 +439,6 @@ impl PbftState {
                                 recovered_new_view_certificates.insert(view, nv_cert);
                                 if let Some(ref b_cert) = bound_cert {
                                     recovered_locked_digests.insert(b_cert.seq, b_cert.digest);
-                                } else if max_prep_view > 0 {
-                                    recovered_locked_digests.insert(max_seq_at_max_view, best_digest);
                                 }
                             }
                         }
@@ -671,10 +671,10 @@ impl PbftState {
             let has_valid_qc = self.prepared_certificates
                 .get(&(vc.prepared_view, vc.prepared_seq))
                 .map(|cert| cert.digest == vc.digest && cert.verify(self.quorum_size, &self.public_keys))
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             if !has_valid_qc {
-                return Err("CERTIFICATE_INVALID: ViewChange rejected; invalid local Quorum Certificate!");
+                return Err("CERTIFICATE_INVALID: ViewChange rejected; missing cryptographically verified Quorum Certificate matching prepared_view and seq!");
             }
         }
 
@@ -698,7 +698,7 @@ impl PbftState {
                 let is_valid_claim = if p_view > 0 || p_seq > 0 {
                     self.prepared_certificates.get(&(p_view, p_seq))
                         .map(|cert| cert.digest == p_digest && cert.verify(self.quorum_size, &self.public_keys))
-                        .unwrap_or(true)
+                        .unwrap_or(false)
                 } else {
                     true
                 };
@@ -717,10 +717,15 @@ impl PbftState {
             let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
 
             let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
-                self.prepared_certificates
+                let cert_opt = self.prepared_certificates
                     .get(&(max_prep_view, max_seq_at_max_view))
                     .filter(|c| c.digest == best_digest && c.verify(self.quorum_size, &self.public_keys))
-                    .cloned()
+                    .cloned();
+                
+                if cert_opt.is_none() {
+                    return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-view PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
+                }
+                cert_opt
             } else {
                 None
             };
@@ -739,9 +744,6 @@ impl PbftState {
             if let Some(ref cert) = bound_cert {
                 self.highest_seq = self.highest_seq.max(cert.seq);
                 self.locked_digests.insert(cert.seq, cert.digest);
-            } else if max_prep_view > 0 {
-                self.highest_seq = self.highest_seq.max(max_seq_at_max_view);
-                self.locked_digests.insert(max_seq_at_max_view, best_digest);
             }
             self.new_view_certificates.insert(vc.target_view, new_view_cert);
 
