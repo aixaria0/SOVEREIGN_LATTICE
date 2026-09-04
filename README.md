@@ -8,6 +8,8 @@
 
 There is no hype here—only mathematically proven invariants, memory-safe asynchronous networking, and strict state machine replication.
 
+https://aixaria0.github.io/SOVEREIGN_LATTICE/
+
 ## 🏗 Core Architecture
 
 * **Formally Verified Consensus:** Core PBFT state transitions and quorum rules ($N = 3f + 1$) are formally verified using Lean 4.
