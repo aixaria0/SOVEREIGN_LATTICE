@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use bls12_381::{G2Projective, Scalar};
+use bls12_381::G2Projective;
 use sovereign_lattice::dkg::DkgSession;
 use sovereign_lattice::pbft::PbftState;
 
@@ -15,8 +14,8 @@ fn main() -> Result<(), &'static str> {
 
     println!("📦 [DKG]: Generated local Feldman polynomial commitments.");
 
-    let mut all_commitments = HashMap::new();
-    all_commitments.insert(node_id, my_commitments.clone());
+    let mut _all_commitments = std::collections::HashMap::new();
+    _all_commitments.insert(node_id, my_commitments.clone());
 
     let expected_participants: Vec<u32> = (0..total_nodes as u32).collect();
 
@@ -24,14 +23,14 @@ fn main() -> Result<(), &'static str> {
 
     println!("🔑 [DKG SUCCESS]: Master public key synthesized securely.");
 
-    let mut public_keys = HashMap::new();
+    let mut public_keys = std::collections::HashMap::new();
     for &id in &expected_participants {
         let node_signing_pk = G2Projective::generator() * my_secret_share;
         public_keys.insert(id, node_signing_pk);
     }
     public_keys.insert(node_id, G2Projective::generator() * my_secret_share);
 
-    let pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
+    let _pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
 
     println!("🛡️ [PBFT]: State machine successfully locked with cryptographically bound master key.");
 
