@@ -26,12 +26,13 @@ fn test_stateful_adversarial_simulation() {
     let digest = [0x55u8; 32];
     let leader_id = 0u32;
 
-    // Use the exact field byte layout matching PbftMessage verification
+    // شامل کردن تمام فیلدها از جمله sender_id برای تطابق کامل با verify()
     let mut msg_bytes = Vec::new();
     msg_bytes.push(Phase::PrePrepare as u8);
     msg_bytes.extend_from_slice(&view.to_be_bytes());
     msg_bytes.extend_from_slice(&seq.to_be_bytes());
     msg_bytes.extend_from_slice(&digest);
+    msg_bytes.extend_from_slice(&leader_id.to_be_bytes());
 
     let mut hasher = Sha256::new();
     hasher.update(&msg_bytes);
@@ -50,11 +51,11 @@ fn test_stateful_adversarial_simulation() {
         signature: leader_sig,
     };
 
-    // Ensure the node accepts the valid message
+    // ۱. بررسی قبول شدن PrePrepare معتبر
     let res = state.handle_message(&pre_prepare);
     assert!(res.is_ok(), "Node unexpectedly rejected valid PrePrepare: {:?}", res);
 
-    // Verify duplicate message is rejected
+    // ۲. بررسی رد شدن پیام تکراری (Duplicate)
     let duplicate_res = state.handle_message(&pre_prepare);
     assert!(duplicate_res.is_err(), "Security check failed: duplicate message was accepted");
 }
