@@ -377,6 +377,22 @@ impl PbftState {
                     return Err("LEADER_VIOLATION: PrePrepare message sent by a non-leader node!");
                 }
 
+                let last_committed_seq = self.commit_certificates.keys()
+                    .filter(|&(v, _)| *v == msg.view)
+                    .map(|&(_, s)| s)
+                    .max()
+                    .unwrap_or(0);
+                    
+                if msg.seq > 0 && msg.seq <= last_committed_seq {
+                    return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to the last committed block!");
+                }
+
+                let has_equivocated = self.pre_prepared_proposals.iter()
+                    .any(|&(v, s, d)| v == msg.view && s == msg.seq && d != msg.digest);
+                if has_equivocated {
+                    return Err("EQUIVOCATION_DETECTED: Malicious leader proposed conflicting digests for the same sequence!");
+                }
+
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 if self.pre_prepared_proposals.contains(&proposal_key) {
                     return Err("DUPLICATE_PROPOSAL: PrePrepare for this sequence and digest already processed!");
@@ -384,7 +400,8 @@ impl PbftState {
 
                 self.pre_prepared_proposals.insert(proposal_key);
                 self.highest_seq = self.highest_seq.max(msg.seq);
-                format!("📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}", msg.sender_id, msg.view, msg.seq)
+                
+                format!("📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}. Triggering PREPARE multicast...", msg.sender_id, msg.view, msg.seq)
             }
 
             Phase::Prepare => {
