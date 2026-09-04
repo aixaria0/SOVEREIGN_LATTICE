@@ -1,23 +1,36 @@
 use crate::pbft::{PbftState, PbftMessage, Phase};
-use crate::threshold_bls::KeyPair;
 use std::collections::HashMap;
 use bls12_381::{G1Projective, G2Projective, Scalar};
 use rand::rngs::OsRng;
 use ff::Field;
 use sha2::{Sha256, Digest};
 
-fn hash_to_curve(msg: &[u8]) -> G1Projective {
+fn test_hash_to_curve(msg: &[u8]) -> G1Projective {
     let mut hasher = Sha256::new();
     hasher.update(msg);
     let hash = hasher.finalize();
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&hash);
-    let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
-    G1Projective::generator() * scalar_hash
+    let mut expanded = [0u8; 64];
+    for (i, chunk) in hash.chunks(32).enumerate() {
+        let start = i * 32;
+        expanded[start..start + 32].copy_from_slice(chunk);
+        expanded[start + 32..start + 64].copy_from_slice(chunk);
+    }
+    let scalar = Scalar::from_bytes_wide(&expanded);
+    G1Projective::generator() * scalar
 }
 
-fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
-    hash_to_curve(msg) * sk
+fn canonical_signing_bytes(phase: Phase, view: u64, seq: u64, digest: &[u8; 32]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.push(phase as u8);
+    bytes.extend_from_slice(&view.to_be_bytes());
+    bytes.extend_from_slice(&seq.to_be_bytes());
+    bytes.extend_from_slice(digest);
+    bytes
+}
+
+fn sign_test_message(phase: Phase, view: u64, seq: u64, digest: &[u8; 32], sk: &Scalar) -> G1Projective {
+    let bytes = canonical_signing_bytes(phase, view, seq, digest);
+    test_hash_to_curve(&bytes) * sk
 }
 
 #[test]
@@ -43,13 +56,7 @@ fn test_stateful_adversarial_simulation() {
     let digest = [0x11; 32];
     let leader_id = 0;
 
-    let mut prep_msg_bytes = Vec::new();
-    prep_msg_bytes.push(Phase::PrePrepare as u8);
-    prep_msg_bytes.extend_from_slice(&view.to_be_bytes());
-    prep_msg_bytes.extend_from_slice(&seq.to_be_bytes());
-    prep_msg_bytes.extend_from_slice(&digest);
-
-    let leader_sig = sign_message(&prep_msg_bytes, &secret_keys[&leader_id]);
+    let leader_sig = sign_test_message(Phase::PrePrepare, view, seq, &digest, &secret_keys[&leader_id]);
     let pre_prepare_msg = PbftMessage {
         phase: Phase::PrePrepare,
         view,
@@ -68,13 +75,7 @@ fn test_stateful_adversarial_simulation() {
 
     let mut prepare_messages = Vec::new();
     for i in 1..n as u32 {
-        let mut canon = Vec::new();
-        canon.push(Phase::Prepare as u8);
-        canon.extend_from_slice(&view.to_be_bytes());
-        canon.extend_from_slice(&seq.to_be_bytes());
-        canon.extend_from_slice(&digest);
-
-        let sig = sign_message(&canon, &secret_keys[&i]);
+        let sig = sign_test_message(Phase::Prepare, view, seq, &digest, &secret_keys[&i]);
         let msg = PbftMessage {
             phase: Phase::Prepare,
             view,
