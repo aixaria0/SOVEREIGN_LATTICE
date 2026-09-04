@@ -10,11 +10,14 @@ fn test_adversarial_event_scheduler() {
         public_keys.insert(i, G2Projective::generator());
     }
 
-    // Invariant: Topology must strictly satisfy N = 3f + 1
-    assert!(PbftState::new(3, public_keys.clone()).is_err());
-    assert!(PbftState::new(5, public_keys.clone()).is_err());
+    // Inject dummy master_pk for the test environment
+    let master_pk = G2Projective::generator();
 
-    let state = PbftState::new(n, public_keys).expect("Cluster failed to initialize");
+    // Invariant: Topology must strictly satisfy N = 3f + 1
+    assert!(PbftState::new(3, public_keys.clone(), master_pk).is_err());
+    assert!(PbftState::new(5, public_keys.clone(), master_pk).is_err());
+
+    let state = PbftState::new(n, public_keys, master_pk).expect("Cluster failed to initialize");
 
     // Adversarial: Truncated frame must be rejected
     let malformed_bytes = vec![0u8; 50];
