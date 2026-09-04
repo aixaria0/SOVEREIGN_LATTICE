@@ -11,7 +11,17 @@ pub enum NodeState {
     Recovering,
 }
 
+impl Default for NodeState {
+    fn default() -> Self {
+        NodeState::Normal
+    }
+}
+
 impl NodeState {
+    pub fn new() -> Self {
+        NodeState::Normal
+    }
+
     pub fn mark_prepared(&mut self, _view: View, _seq: u64, _digest: Digest) -> Result<(), &'static str> {
         Ok(())
     }
