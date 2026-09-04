@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use bls12_381::{G2Projective, Scalar};
 use ff::Field;
 use rand::rngs::OsRng;
-use crate::pedersen_vss::verify_feldman_share;
+use crate::pedersen_vss::{verify_feldman_share, evaluation_point};
 
 pub struct DkgSession {
     pub node_id: u32,
@@ -21,13 +21,12 @@ impl DkgSession {
             coefficients.push(Scalar::random(&mut OsRng));
         }
 
-        // Map node_id to a 1-indexed domain (x != 0) to protect constant coefficient a_0
-        let evaluation_point = Scalar::from((node_id + 1) as u64);
+        let eval_pt = evaluation_point(node_id);
         let mut my_secret_share = Scalar::zero();
         let mut x_pow = Scalar::one();
         for coeff in &coefficients {
             my_secret_share += *coeff * x_pow;
-            x_pow *= evaluation_point;
+            x_pow *= eval_pt;
         }
 
         Self {
@@ -49,13 +48,12 @@ impl DkgSession {
     }
 
     pub fn evaluate_share_for(&self, recipient_id: u32) -> Scalar {
-        // Ensure recipient evaluation uses the exact same 1-indexed domain
-        let evaluation_point = Scalar::from((recipient_id + 1) as u64);
+        let eval_pt = evaluation_point(recipient_id);
         let mut evaluation = Scalar::zero();
         let mut x_pow = Scalar::one();
         for coeff in &self.my_secret_polynomial_coefficients {
             evaluation += *coeff * x_pow;
-            x_pow *= evaluation_point;
+            x_pow *= eval_pt;
         }
         evaluation
     }
@@ -84,7 +82,6 @@ impl DkgSession {
             return Err("INSUFFICIENT_SHARES: DKG session lacks enough verified shares to finalize.");
         }
 
-        // Enforce strict consensus alignment on the qualified dealer set to guarantee identical master keys
         for &participant_id in expected_participants {
             if participant_id != self.node_id && !self.received_shares.contains_key(&participant_id) {
                 return Err("DTS_MISMATCH: Missing verified share from an expected network participant.");
