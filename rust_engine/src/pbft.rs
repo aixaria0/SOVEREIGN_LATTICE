@@ -228,18 +228,25 @@ impl NewViewCertificate {
             return false;
         }
 
-        let max_prep_view = self.view_change_votes.values().map(|v| v.0).max().unwrap_or(0);
-        let max_seq_at_max_view = self.view_change_votes.values()
-            .filter(|v| v.0 == max_prep_view)
-            .map(|v| v.1)
-            .max()
-            .unwrap_or(0);
+        let mut highest_valid_claim: Option<(u64, u64, [u8; 32])> = None;
 
-        let best_digest = self.view_change_votes.values()
-            .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
-            .map(|v| v.2)
-            .next()
-            .unwrap_or([0u8; 32]);
+        for v in self.view_change_votes.values() {
+            let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
+            let is_valid_claim = p_view == 0 || self.selected_prepared_certificate.as_ref()
+                .map_or(false, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
+
+            if is_valid_claim {
+                if let Some(current) = highest_valid_claim {
+                    if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
+                        highest_valid_claim = Some((p_view, p_seq, p_digest));
+                    }
+                } else {
+                    highest_valid_claim = Some((p_view, p_seq, p_digest));
+                }
+            }
+        }
+
+        let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
 
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
@@ -248,10 +255,8 @@ impl NewViewCertificate {
             if cert.view != max_prep_view || cert.seq != max_seq_at_max_view || cert.digest != best_digest {
                 return false;
             }
-        } else {
-            if max_prep_view > 0 || max_seq_at_max_view > 0 {
-                return false;
-            }
+        } else if max_prep_view > 0 || max_seq_at_max_view > 0 {
+            return false;
         }
 
         let mut valid_count = 0;
@@ -388,18 +393,30 @@ impl PbftState {
                     let supporters = recovered_view_change_votes.entry(view).or_default();
                     supporters.insert(sender_id, (prep_view, seq, digest, signature));
                     if supporters.len() >= quorum_size {
-                        let max_prep_view = supporters.values().map(|v| v.0).max().unwrap_or(0);
-                        let max_seq_at_max_view = supporters.values()
-                            .filter(|v| v.0 == max_prep_view)
-                            .map(|v| v.1)
-                            .max()
-                            .unwrap_or(0);
+                        let mut highest_valid_claim: Option<(u64, u64, [u8; 32])> = None;
 
-                        let best_digest = supporters.values()
-                            .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
-                            .map(|v| v.2)
-                            .next()
-                            .unwrap_or([0u8; 32]);
+                        for v in supporters.values() {
+                            let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
+                            let is_valid_claim = if p_view > 0 || p_seq > 0 {
+                                recovered_certificates.get(&(p_view, p_seq))
+                                    .map(|cert| cert.digest == p_digest && cert.verify(quorum_size, &initial_public_keys))
+                                    .unwrap_or(false)
+                            } else {
+                                true
+                            };
+
+                            if is_valid_claim {
+                                if let Some(current) = highest_valid_claim {
+                                    if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
+                                        highest_valid_claim = Some((p_view, p_seq, p_digest));
+                                    }
+                                } else {
+                                    highest_valid_claim = Some((p_view, p_seq, p_digest));
+                                }
+                            }
+                        }
+
+                        let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
 
                         let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
                             recovered_certificates.get(&(max_prep_view, max_seq_at_max_view))
@@ -646,23 +663,33 @@ impl PbftState {
         supporters.insert(vc.sender_id, (vc.prepared_view, vc.prepared_seq, vc.digest, vc.signature));
 
         if supporters.len() >= self.quorum_size {
-            let max_prep_view = supporters.values().map(|v| v.0).max().unwrap_or(0);
-            let max_seq_at_max_view = supporters.values()
-                .filter(|v| v.0 == max_prep_view)
-                .map(|v| v.1)
-                .max()
-                .unwrap_or(0);
+            // BYZANTINE-RESISTANT FILTERING: 
+            // We ignore fake/phantom high views that aren't backed by a valid local certificate.
+            let mut highest_valid_claim: Option<(u64, u64, [u8; 32])> = None;
 
-            let digests_at_max: HashSet<[u8; 32]> = supporters.values()
-                .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
-                .map(|v| v.2)
-                .collect();
+            for v in supporters.values() {
+                let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
+                
+                let is_valid_claim = if p_view > 0 || p_seq > 0 {
+                    self.prepared_certificates.get(&(p_view, p_seq))
+                        .map(|cert| cert.digest == p_digest && cert.verify(self.quorum_size, &self.public_keys))
+                        .unwrap_or(false)
+                } else {
+                    true
+                };
 
-            if digests_at_max.len() > 1 {
-                return Err("VIEW_CHANGE_CONFLICT: Conflicting digests reported for highest prepared view and sequence!");
+                if is_valid_claim {
+                    if let Some(current) = highest_valid_claim {
+                        if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
+                            highest_valid_claim = Some((p_view, p_seq, p_digest));
+                        }
+                    } else {
+                        highest_valid_claim = Some((p_view, p_seq, p_digest));
+                    }
+                }
             }
-            
-            let best_digest = *digests_at_max.iter().next().unwrap_or(&[0u8; 32]);
+
+            let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
 
             let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
                 let cert_opt = self.prepared_certificates
@@ -801,18 +828,30 @@ mod adversarial_tests {
         supporters.insert(2, (malicious_prep_view, malicious_seq, malicious_digest, vc2.signature));
         supporters.insert(3, (malicious_prep_view, malicious_seq, malicious_digest, vc3.signature));
 
-        let max_prep_view = supporters.values().map(|v| v.0).max().unwrap_or(0);
-        let max_seq_at_max_view = supporters.values()
-            .filter(|v| v.0 == max_prep_view)
-            .map(|v| v.1)
-            .max()
-            .unwrap_or(0);
+        let mut highest_valid_claim: Option<(u64, u64, [u8; 32])> = None;
 
-        let best_digest = supporters.values()
-            .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
-            .map(|v| v.2)
-            .next()
-            .unwrap_or([0u8; 32]);
+        for v in supporters.values() {
+            let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
+            let is_valid_claim = if p_view > 0 || p_seq > 0 {
+                state.prepared_certificates.get(&(p_view, p_seq))
+                    .map(|cert| cert.digest == p_digest && cert.verify(state.quorum_size, &state.public_keys))
+                    .unwrap_or(false)
+            } else {
+                true
+            };
+
+            if is_valid_claim {
+                if let Some(current) = highest_valid_claim {
+                    if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
+                        highest_valid_claim = Some((p_view, p_seq, p_digest));
+                    }
+                } else {
+                    highest_valid_claim = Some((p_view, p_seq, p_digest));
+                }
+            }
+        }
+
+        let (max_prep_view, max_seq_at_max_view, best_digest) = highest_valid_claim.unwrap_or((0, 0, [0u8; 32]));
 
         let bound_cert = if max_prep_view > 0 || max_seq_at_max_view > 0 {
             state.prepared_certificates
