@@ -6,13 +6,7 @@ use sha2::{Sha256, Digest};
 use sovereign_lattice::pbft::{PbftMessage, PbftState, Phase};
 
 fn hash_to_curve(msg: &[u8]) -> G1Projective {
-    let mut hasher = Sha256::new();
-    hasher.update(msg);
-    let hash = hasher.finalize();
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&hash);
-    let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
-    G1Projective::generator() * scalar_hash
+    G1Projective::hash_to_curve(msg, b"SOVEREIGN_LATTICE_BLS", b"BLS_SIG_G1")
 }
 
 #[test]
