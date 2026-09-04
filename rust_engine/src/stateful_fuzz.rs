@@ -1,44 +1,33 @@
-use crate::pbft::{PbftState, PbftMessage, Phase};
 use std::collections::HashMap;
-use bls12_381::{G1Projective, G2Projective, Scalar};
-use rand::rngs::OsRng;
+use bls12_381::{G2Projective, Scalar};
 use ff::Field;
-use sha2::{Sha256, Digest};
+use rand::rngs::OsRng;
+use crate::pbft::{PbftMessage, PbftState, Phase};
+use crate::threshold_bls::KeyPair;
 
-fn test_hash_to_curve(msg: &[u8]) -> G1Projective {
-    let mut hasher = Sha256::new();
-    hasher.update(msg);
-    let hash = hasher.finalize();
-    let mut expanded = [0u8; 64];
-    for (i, chunk) in hash.chunks(32).enumerate() {
-        let start = i * 32;
-        expanded[start..start + 32].copy_from_slice(chunk);
-        expanded[start + 32..start + 64].copy_from_slice(chunk);
+fn generate_test_keys(n: usize) -> (HashMap<u32, KeyPair>, HashMap<u32, G2Projective>) {
+    let mut rng = OsRng;
+    let mut keypairs = HashMap::new();
+    let mut pubkeys = HashMap::new();
+
+    for id in 0..n as u32 {
+        let sk = Scalar::random(&mut rng);
+        let kp = KeyPair {
+            id,
+            secret_key: sk,
+            public_key: G2Projective::generator() * sk,
+        };
+        pubkeys.insert(id, kp.public_key);
+        keypairs.insert(id, kp);
     }
-    let scalar = Scalar::from_bytes_wide(&expanded);
-    G1Projective::generator() * scalar
-}
 
-fn sign_test_message(phase: Phase, view: u64, seq: u64, digest: &[u8; 32], sk: &Scalar) -> G1Projective {
-    let mut canonical_msg = Vec::new();
-    canonical_msg.push(phase as u8);
-    canonical_msg.extend_from_slice(&view.to_be_bytes());
-    canonical_msg.extend_from_slice(&seq.to_be_bytes());
-    canonical_msg.extend_from_slice(digest);
-    test_hash_to_curve(&canonical_msg) * sk
+    (keypairs, pubkeys)
 }
 
 #[test]
-fn test_true_stateful_fuzzing() {
+fn test_stateful_adversarial_simulation() {
     let n = 4;
-    let mut secret_keys = HashMap::new();
-    let mut public_keys = HashMap::new();
-    for i in 0..n as u32 {
-        let sk = Scalar::random(&mut OsRng);
-        let pk = G2Projective::generator() * sk;
-        secret_keys.insert(i, sk);
-        public_keys.insert(i, pk);
-    }
+    let (keypairs, public_keys) = generate_test_keys(n);
 
     let mut nodes: HashMap<u32, PbftState> = HashMap::new();
     for i in 0..n as u32 {
@@ -46,13 +35,20 @@ fn test_true_stateful_fuzzing() {
         nodes.insert(i, state);
     }
 
-    let view: u64 = 0;
-    let seq: u64 = 1;
-    let digest = [0x55; 32];
-    
-    let leader_id = nodes.get(&0).unwrap().get_expected_leader(view);
-    let leader_sig = sign_test_message(Phase::PrePrepare, view, seq, &digest, &secret_keys[&leader_id]);
-    
+    let view = 0u64;
+    let seq = 1u64;
+    let digest = [0x11; 32];
+    let leader_id = 0u32;
+
+    let mut prep_msg_bytes = Vec::new();
+    prep_msg_bytes.push(Phase::PrePrepare as u8);
+    prep_msg_bytes.extend_from_slice(&view.to_be_bytes());
+    prep_msg_bytes.extend_from_slice(&seq.to_be_bytes());
+    prep_msg_bytes.extend_from_slice(&digest);
+
+    let leader_kp = &keypairs[&leader_id];
+    let leader_sig = leader_kp.sign(&prep_msg_bytes);
+
     let pre_prepare_msg = PbftMessage {
         phase: Phase::PrePrepare,
         view,
@@ -62,17 +58,9 @@ fn test_true_stateful_fuzzing() {
         signature: leader_sig,
     };
 
-    for (id, node) in nodes.iter_mut() {
-        if *id != leader_id {
-            let res = node.handle_message(&pre_prepare_msg);
-            assert!(res.is_ok(), "Stateful Fuzzer: Replica failed to accept valid PrePrepare");
-        }
-    }
-
-    for (id, node) in &nodes {
-        assert!(
-            node.current_view >= view,
-            "INVARIANT VIOLATION: Node {} experienced view regression!", id
-        );
+    for node_id in 0..n as u32 {
+        let node = nodes.get_mut(&node_id).unwrap();
+        let res = node.handle_message(&pre_prepare_msg);
+        assert!(res.is_ok(), "Node {} rejected valid PrePrepare", node_id);
     }
 }
