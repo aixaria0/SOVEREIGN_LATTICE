@@ -49,7 +49,9 @@ fn test_stateful_adversarial_simulation() {
     let view: u64 = 0;
     let seq: u64 = 1;
     let digest = [0x11; 32];
-    let leader_id = 0;
+    
+    // Dynamically fetch the exact expected leader for view 0 according to PBFT topology rules
+    let leader_id = nodes.get(&1).unwrap().get_expected_leader(view);
 
     let leader_sig = sign_test_message(Phase::PrePrepare, view, seq, &digest, &secret_keys[&leader_id]);
     let pre_prepare_msg = PbftMessage {
@@ -69,7 +71,8 @@ fn test_stateful_adversarial_simulation() {
     }
 
     let mut prepare_messages = Vec::new();
-    for i in 1..n as u32 {
+    for i in 0..n as u32 {
+        if i == leader_id { continue; }
         let sig = sign_test_message(Phase::Prepare, view, seq, &digest, &secret_keys[&i]);
         let msg = PbftMessage {
             phase: Phase::Prepare,
