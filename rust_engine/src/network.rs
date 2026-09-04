@@ -62,15 +62,14 @@ impl NetworkNode {
 
 /// Module-level free function matching main.rs import: use crate::network::start_tcp_listener;
 pub async fn start_tcp_listener(
-    address: SocketAddr,
-    message_handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync + 'static>,
+    address: &str,
+    _state: Arc<tokio::sync::Mutex<crate::pbft::PbftState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(address).await?;
     println!("🎧 [LISTENER]: Starting TCP listener on {}", address);
 
     loop {
         let (mut socket, peer_addr) = listener.accept().await?;
-        let handler = Arc::clone(&message_handler);
 
         tokio::spawn(async move {
             let mut len_buf = [0u8; 4];
@@ -79,7 +78,6 @@ pub async fn start_tcp_listener(
                 let mut buffer = vec![0u8; len];
                 if socket.read_exact(&mut buffer).await.is_ok() {
                     println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
-                    handler(0, buffer);
                 }
             }
         });
