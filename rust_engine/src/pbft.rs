@@ -542,9 +542,6 @@ impl PbftState {
                     return Err("VIEW_MISMATCH: Prepare view does not match current consensus view!");
                 }
 
-                // =========================================================================
-                // [NEW SAFETY ENFORCEMENT]: Enforce local PreparedCertificate uniqueness
-                // =========================================================================
                 if self.prepared_certificates.contains_key(&(msg.view, msg.seq)) {
                     return Err("CERTIFICATE_ALREADY_FORMED: A PreparedCertificate for this sequence is already locked. Redundant votes rejected to prevent certificate equivocation.");
                 }
@@ -590,9 +587,6 @@ impl PbftState {
                     return Err("VIEW_MISMATCH: Commit view does not match current consensus view!");
                 }
 
-                // =========================================================================
-                // [NEW SAFETY ENFORCEMENT]: Enforce local CommitCertificate uniqueness
-                // =========================================================================
                 if self.commit_certificates.contains_key(&(msg.view, msg.seq)) {
                     return Err("CERTIFICATE_ALREADY_FORMED: A CommitCertificate for this sequence is already locked. Redundant votes rejected to prevent certificate equivocation.");
                 }
@@ -653,9 +647,6 @@ impl PbftState {
     }
 
     pub fn handle_view_change_payload(&mut self, vc: &ViewChangePayload) -> Result<String, &'static str> {
-        // =========================================================================
-        // [NEW SAFETY ENFORCEMENT]: Enforce local NewViewCertificate uniqueness
-        // =========================================================================
         if self.new_view_certificates.contains_key(&vc.target_view) {
             return Err("CERTIFICATE_ALREADY_FORMED: A NewViewCertificate for this target view is already locked locally. Redundant payloads rejected.");
         }
@@ -866,5 +857,100 @@ mod adversarial_tests {
         assert_eq!(state.highest_seq, 0, "SAFETY VIOLATION: Engine accepted unbacked phantom sequence!");
         assert_eq!(state.current_view, 0, "Engine should remain in view 0 because all ViewChange claims were maliciously forged!");
     }
-}
 
+    #[test]
+    fn test_cross_view_equivocation_attack_blocked() {
+        let n = 4;
+        let (secret_keys, public_keys) = generate_test_keys(n);
+        
+        let mut node1_state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+        
+        let seq = 10;
+        let digest_a = [0xaa; 32];
+        let digest_b = [0xbb; 32];
+        
+        let pre_prepare_msg = {
+            let msg = PbftMessage {
+                phase: Phase::PrePrepare,
+                view: 0,
+                seq,
+                digest: digest_a,
+                sender_id: 0,
+                signature: G1Projective::identity(),
+            };
+            let mut canon = Vec::new();
+            canon.push(msg.phase as u8);
+            canon.extend_from_slice(&msg.view.to_be_bytes());
+            canon.extend_from_slice(&msg.seq.to_be_bytes());
+            canon.extend_from_slice(&msg.digest);
+            let sig = sign_message(&canon, &secret_keys[&0]);
+            PbftMessage { signature: sig, ..msg }
+        };
+
+        assert!(node1_state.handle_message(&pre_prepare_msg).is_ok());
+
+        for sender in 0..3 {
+            let prep_msg = {
+                let msg = PbftMessage {
+                    phase: Phase::Prepare,
+                    view: 0,
+                    seq,
+                    digest: digest_a,
+                    sender_id: sender,
+                    signature: G1Projective::identity(),
+                };
+                let mut canon = Vec::new();
+                canon.push(msg.phase as u8);
+                canon.extend_from_slice(&msg.view.to_be_bytes());
+                canon.extend_from_slice(&msg.seq.to_be_bytes());
+                canon.extend_from_slice(&msg.digest);
+                let sig = sign_message(&canon, &secret_keys[&sender]);
+                PbftMessage { signature: sig, ..msg }
+            };
+            let _ = node1_state.handle_message(&prep_msg);
+        }
+
+        assert_eq!(node1_state.locked_digests.get(&seq), Some(&digest_a));
+
+        let target_view = 1;
+        for sender in 0..3 {
+            let vc = ViewChangePayload {
+                target_view,
+                prepared_view: 0,
+                prepared_seq: seq,
+                digest: digest_a,
+                sender_id: sender,
+                signature: G1Projective::identity(),
+            };
+            let canon = vc.canonical_bytes();
+            let sig = sign_message(&canon, &secret_keys[&sender]);
+            let signed_vc = ViewChangePayload { signature: sig, ..vc };
+            let _ = node1_state.handle_view_change_payload(&signed_vc);
+        }
+
+        assert_eq!(node1_state.current_view, 1);
+        assert_eq!(node1_state.locked_digests.get(&seq), Some(&digest_a));
+
+        let malicious_pre_prepare = {
+            let msg = PbftMessage {
+                phase: Phase::PrePrepare,
+                view: 1,
+                seq,
+                digest: digest_b,
+                sender_id: 1,
+                signature: G1Projective::identity(),
+            };
+            let mut canon = Vec::new();
+            canon.push(msg.phase as u8);
+            canon.extend_from_slice(&msg.view.to_be_bytes());
+            canon.extend_from_slice(&msg.seq.to_be_bytes());
+            canon.extend_from_slice(&msg.digest);
+            let sig = sign_message(&canon, &secret_keys[&1]);
+            PbftMessage { signature: sig, ..msg }
+        };
+
+        let result = node1_state.handle_message(&malicious_pre_prepare);
+        assert!(result.is_err(), "SECURITY VIOLATION: Malicious cross-view PrePrepare with conflicting digest was allowed!");
+        assert!(result.unwrap_err().contains("SAFETY_VIOLATION"), "Expected safety violation error message.");
+    }
+}
