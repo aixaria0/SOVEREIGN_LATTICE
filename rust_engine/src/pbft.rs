@@ -344,10 +344,16 @@ impl PbftState {
         let mut recovered_new_view_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
 
-        wal.replay_log(|view, seq_packed, phase_u8, sender_id, digest, signature| {
+        wal.replay_log(|view, seq_or_packed, phase_u8, sender_id, digest, signature| {
             if view > recovered_view { recovered_view = view; }
-            let prep_view = seq_packed >> 32;
-            let seq = seq_packed & 0xFFFFFFFF;
+            
+            // P0 FIX: Safely unpack the state based on the exact consensus phase
+            let (prep_view, seq) = if phase_u8 == Phase::ViewChange as u8 {
+                (seq_or_packed >> 32, seq_or_packed & 0xFFFFFFFF)
+            } else {
+                (view, seq_or_packed)
+            };
+
             if seq > recovered_seq { recovered_seq = seq; }
             
             match phase_u8 {
