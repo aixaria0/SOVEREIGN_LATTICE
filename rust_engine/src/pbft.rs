@@ -583,10 +583,6 @@ mod adversarial_tests {
     use ff::Field;
     use sha2::{Sha256, Digest};
 
-    // TODO(CRYPTO-CORE): Implement strict RFC 9380 Hash-to-Curve using ExpandMsgXmd<sha2::Sha256>.
-    // Current implementation uses a scalar multiplication stub combined with SHA-256 for adversarial state-machine testing.
-    // DO NOT deploy to production without integrating the elliptic-curve::hash2curve traits.
-
     fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
         let mut secret_keys = HashMap::new();
         let mut public_keys = HashMap::new();
@@ -626,7 +622,7 @@ mod adversarial_tests {
         let malicious_seq: u64 = 999; 
         let malicious_digest = [0xbb; 32];
 
-        let mut create_view_change = |sender_id: u32, sk: &Scalar| {
+        let create_view_change = |sender_id: u32, sk: &Scalar| {
             let mut canonical_msg = Vec::new();
             canonical_msg.push(Phase::ViewChange as u8);
             canonical_msg.extend_from_slice(&target_view.to_be_bytes());
