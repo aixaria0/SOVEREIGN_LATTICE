@@ -1,12 +1,12 @@
 use proptest::prelude::*;
-use crate::pbft::{PbftState, PbftMessage, Phase};
-use crate::threshold_bls::KeyPair;
+use crate::pbft::{PbftState, PbftMessage, ViewChangePayload, Phase};
 use std::collections::HashMap;
 
 proptest! {
     #[test]
     fn fuzz_wire_parser(bytes in proptest::collection::vec(any::<u8>(), 0..300)) {
         let _ = PbftMessage::from_bytes(&bytes);
+        let _ = ViewChangePayload::from_bytes(&bytes);
     }
 
     #[test]
@@ -19,8 +19,9 @@ proptest! {
     ) {
         let mut initial_pks = HashMap::new();
         for i in 0..4u32 {
-            let kp = KeyPair::from_seed(format!("FUZZ_NODE_SEED_{}", i).as_bytes());
-            initial_pks.insert(i, kp.public_key);
+            let sk = bls12_381::Scalar::from(i as u64 + 1);
+            let pk = bls12_381::G2Projective::generator() * sk;
+            initial_pks.insert(i, pk);
         }
 
         if let Ok(mut state) = PbftState::new(4, initial_pks) {
@@ -33,16 +34,27 @@ proptest! {
 
             let signature = bls12_381::G1Projective::generator();
 
-            let msg = PbftMessage {
-                phase,
-                view,
-                seq,
-                digest,
-                sender_id,
-                signature,
-            };
-
-            let _ = state.handle_message(&msg);
+            if phase == Phase::ViewChange {
+                let vc = ViewChangePayload {
+                    target_view: view,
+                    prepared_view: view,
+                    prepared_seq: seq,
+                    digest,
+                    sender_id,
+                    signature,
+                };
+                let _ = state.handle_view_change_payload(&vc);
+            } else {
+                let msg = PbftMessage {
+                    phase,
+                    view,
+                    seq,
+                    digest,
+                    sender_id,
+                    signature,
+                };
+                let _ = state.handle_message(&msg);
+            }
         }
     }
 }
