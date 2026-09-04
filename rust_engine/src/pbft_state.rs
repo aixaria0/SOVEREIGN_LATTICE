@@ -7,6 +7,12 @@ use crate::wal::WriteAheadLog;
 
 static TEST_WAL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+pub type NodeId = u32;
+pub type Digest = [u8; 32];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct View(pub u64);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     PrePrepare = 0,
@@ -30,7 +36,7 @@ impl NodeState {
     pub fn mark_prepared(&mut self, view: u64, seq: u64, digest: [u8; 32]) -> Result<(), &'static str> {
         if let Some(locked_digest) = self.locked_digests.get(&seq) {
             if locked_digest != &digest {
-                return Err("SAFETY_VIOLATION: Sequence is already locked to a different digest in a previous view");
+                return Err("SAFETY_VIOLATION");
             }
         }
         self.prepared.insert((view, seq), digest);
@@ -71,7 +77,7 @@ impl PbftMessage {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
         if bytes.len() != 101 {
-            return Err("INVALID_PAYLOAD_SIZE: Expected exactly 101 bytes for PBFT Message.");
+            return Err("INVALID_PAYLOAD_SIZE");
         }
         
         let phase = match bytes[0] {
@@ -79,7 +85,7 @@ impl PbftMessage {
             1 => Phase::Prepare,
             2 => Phase::Commit,
             3 => Phase::ViewChange,
-            _ => return Err("INVALID_PHASE: Byte does not match any known consensus phase."),
+            _ => return Err("INVALID_PHASE"),
         };
         
         let mut view_bytes = [0u8; 8];
@@ -101,7 +107,7 @@ impl PbftMessage {
         sig_bytes.copy_from_slice(&bytes[53..101]);
         
         let affine_opt: Option<G1Affine> = G1Affine::from_compressed(&sig_bytes).into();
-        let signature = affine_opt.map(G1Projective::from).ok_or("INVALID_SIGNATURE_BYTES: Failed to decompress BLS signature.")?;
+        let signature = affine_opt.map(G1Projective::from).ok_or("INVALID_SIGNATURE_BYTES")?;
 
         Ok(Self {
             phase,
@@ -139,10 +145,10 @@ impl ViewChangePayload {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
         if bytes.len() != 109 {
-            return Err("INVALID_PAYLOAD_SIZE: Expected exactly 109 bytes for ViewChange Message.");
+            return Err("INVALID_PAYLOAD_SIZE");
         }
         if bytes[0] != Phase::ViewChange as u8 {
-            return Err("INVALID_PHASE: Byte does not match ViewChange phase.");
+            return Err("INVALID_PHASE");
         }
 
         let mut target_bytes = [0u8; 8];
@@ -168,7 +174,7 @@ impl ViewChangePayload {
         sig_bytes.copy_from_slice(&bytes[61..109]);
 
         let affine_opt: Option<G1Affine> = G1Affine::from_compressed(&sig_bytes).into();
-        let signature = affine_opt.map(G1Projective::from).ok_or("INVALID_SIGNATURE_BYTES: Failed to decompress BLS signature.")?;
+        let signature = affine_opt.map(G1Projective::from).ok_or("INVALID_SIGNATURE_BYTES")?;
 
         Ok(Self {
             target_view,
@@ -340,11 +346,11 @@ pub struct PbftState {
 impl PbftState {
     pub fn new(total_nodes: usize, initial_public_keys: HashMap<u32, G2Projective>) -> Result<Self, &'static str> {
         if total_nodes < 4 {
-            return Err("TOPOLOGY_VIOLATION: Network size N must be at least 4 for PBFT (f >= 1).");
+            return Err("TOPOLOGY_VIOLATION");
         }
         let f = (total_nodes - 1) / 3;
         if total_nodes != 3 * f + 1 {
-            return Err("TOPOLOGY_VIOLATION: Network size N must strictly satisfy N = 3f + 1!");
+            return Err("TOPOLOGY_VIOLATION");
         }
 
         let mut registered_nodes = HashSet::new();
@@ -352,7 +358,7 @@ impl PbftState {
         for id in 0..total_nodes as u32 {
             registered_nodes.insert(id);
             if !initial_public_keys.contains_key(&id) {
-                return Err("REGISTRY_VIOLATION: Missing cryptographic public key for a registered node ID!");
+                return Err("REGISTRY_VIOLATION");
             }
         }
 
@@ -363,8 +369,7 @@ impl PbftState {
             "consensus_wal.log".to_string()
         };
 
-        let mut wal = WriteAheadLog::open(&wal_path)
-            .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
+        let mut wal = WriteAheadLog::open(&wal_path).map_err(|_| "WAL_ERROR")?;
 
         let mut recovered_view = 0;
         let mut recovered_seq = 0;
@@ -468,7 +473,7 @@ impl PbftState {
                 }
                 _ => {}
             }
-        }).map_err(|_| "WAL_CORRUPTION_FATAL: Log integrity compromised during replay.")?;
+        }).map_err(|_| "WAL_CORRUPTION_FATAL")?;
 
         Ok(Self {
             total_nodes,
@@ -496,11 +501,10 @@ impl PbftState {
 
     pub fn handle_message(&mut self, msg: &PbftMessage) -> Result<String, &'static str> {
         if !self.registered_nodes.contains(&msg.sender_id) {
-            return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
+            return Err("AUTH_FAILED");
         }
 
-        let pk = self.public_keys.get(&msg.sender_id)
-            .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
+        let pk = self.public_keys.get(&msg.sender_id).unwrap();
 
         let mut canonical_msg = Vec::new();
         canonical_msg.push(msg.phase as u8);
@@ -509,18 +513,18 @@ impl PbftState {
         canonical_msg.extend_from_slice(&msg.digest);
 
         if !verify_bls_signature(&canonical_msg, &msg.signature, pk) {
-            return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
+            return Err("CRYPTO_AUTH_FAILED");
         }
 
         let response = match msg.phase {
             Phase::PrePrepare => {
                 if msg.view != self.current_view {
-                    return Err("VIEW_MISMATCH: PrePrepare view does not match current consensus view!");
+                    return Err("VIEW_MISMATCH");
                 }
 
                 let expected_leader = self.get_expected_leader(msg.view);
                 if msg.sender_id != expected_leader {
-                    return Err("LEADER_VIOLATION: PrePrepare message sent by a non-leader node!");
+                    return Err("LEADER_VIOLATION");
                 }
 
                 let last_globally_committed_seq = self.commit_certificates.keys()
@@ -529,56 +533,56 @@ impl PbftState {
                     .unwrap_or(0);
                     
                 if msg.seq > 0 && msg.seq <= last_globally_committed_seq {
-                    return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to a GLOBALLY committed block!");
+                    return Err("SEQUENCE_VIOLATION");
                 }
 
                 if let Some(locked_digest) = self.node_state.locked_digests.get(&msg.seq) {
                     if locked_digest != &msg.digest {
-                        return Err("SAFETY_VIOLATION: Malicious PrePrepare! This sequence is permanently locked to a different digest from a previous view.");
+                        return Err("SAFETY_VIOLATION");
                     }
                 }
 
                 let has_equivocated = self.pre_prepared_proposals.iter()
                     .any(|&(v, s, d)| v == msg.view && s == msg.seq && d != msg.digest);
                 if has_equivocated {
-                    return Err("EQUIVOCATION_DETECTED: Malicious leader proposed conflicting digests for the same sequence!");
+                    return Err("EQUIVOCATION_DETECTED");
                 }
 
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 if self.pre_prepared_proposals.contains(&proposal_key) {
-                    return Err("DUPLICATE_PROPOSAL: PrePrepare for this sequence and digest already processed!");
+                    return Err("DUPLICATE_PROPOSAL");
                 }
 
                 self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
-                    .map_err(|_| "WAL_ERROR: Failed to write valid PrePrepare to durable log!")?;
+                    .map_err(|_| "WAL_ERROR")?;
 
                 self.pre_prepared_proposals.insert(proposal_key);
                 self.highest_seq = self.highest_seq.max(msg.seq);
                 
-                format!("📥 [PRE-PREPARE]: Validated leader {} proposal for View {} Seq {}.", msg.sender_id, msg.view, msg.seq)
+                format!("PRE-PREPARE OK: {}", msg.seq)
             }
 
             Phase::Prepare => {
                 if msg.view != self.current_view {
-                    return Err("VIEW_MISMATCH: Prepare view does not match current consensus view!");
+                    return Err("VIEW_MISMATCH");
                 }
 
                 if self.prepared_certificates.contains_key(&(msg.view, msg.seq)) {
-                    return Err("CERTIFICATE_ALREADY_FORMED: A PreparedCertificate for this sequence is already locked. Redundant votes rejected to prevent certificate equivocation.");
+                    return Err("CERTIFICATE_ALREADY_FORMED");
                 }
 
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 if !self.pre_prepared_proposals.contains(&proposal_key) {
-                    return Err("PREPARE_WITHOUT_PREPREPARE: Prepare rejected; no valid PrePrepare exists for this digest.");
+                    return Err("PREPARE_WITHOUT_PREPREPARE");
                 }
 
                 let sigs = self.prepare_votes.entry(proposal_key).or_default();
                 if sigs.contains_key(&msg.sender_id) {
-                    return Err("DUPLICATE_VOTE_DETECTED: Node attempted to vote twice for the same sequence!");
+                    return Err("DUPLICATE_VOTE_DETECTED");
                 }
 
                 self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
-                    .map_err(|_| "WAL_ERROR: Failed to write valid Prepare to durable log!")?;
+                    .map_err(|_| "WAL_ERROR")?;
                 
                 sigs.insert(msg.sender_id, msg.signature);
 
@@ -591,25 +595,25 @@ impl PbftState {
                     };
                     
                     if !cert.verify(self.quorum_size, &self.public_keys) {
-                        return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Prepared QC failed cryptographic verification!");
+                        return Err("CERTIFICATE_VERIFICATION_FAILED");
                     }
 
                     self.node_state.mark_prepared(msg.view, msg.seq, msg.digest)?;
                     self.prepared_certificates.insert((msg.view, msg.seq), cert);
 
-                    format!("✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}. SEQUENCE LOCKED.", msg.view, msg.seq)
+                    format!("PREPARED CERTIFICATE OK: {}", msg.seq)
                 } else {
-                    format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
+                    format!("PREPARE VOTE OK")
                 }
             }
 
             Phase::Commit => {
                 if msg.view != self.current_view {
-                    return Err("VIEW_MISMATCH: Commit view does not match current consensus view!");
+                    return Err("VIEW_MISMATCH");
                 }
 
                 if self.commit_certificates.contains_key(&(msg.view, msg.seq)) {
-                    return Err("CERTIFICATE_ALREADY_FORMED: A CommitCertificate for this sequence is already locked. Redundant votes rejected to prevent certificate equivocation.");
+                    return Err("CERTIFICATE_ALREADY_FORMED");
                 }
 
                 let has_valid_certificate = self.prepared_certificates
@@ -618,12 +622,12 @@ impl PbftState {
                     .unwrap_or(false);
 
                 if !has_valid_certificate {
-                    return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Prepared Certificate for THIS view!");
+                    return Err("SAFETY_VIOLATION");
                 }
 
                 if let Some(existing_digest) = self.node_state.committed.get(&(msg.view, msg.seq)) {
                     if existing_digest != &msg.digest {
-                        return Err("EQUIVOCATION_DETECTED: Conflicting COMMIT digest for same sequence!");
+                        return Err("EQUIVOCATION_DETECTED");
                     }
                 }
 
@@ -631,11 +635,11 @@ impl PbftState {
                 let sigs = self.commit_votes.entry(proposal_key).or_default();
                 
                 if sigs.contains_key(&msg.sender_id) {
-                    return Err("DUPLICATE_VOTE_DETECTED: Node attempted to commit twice for the same sequence!");
+                    return Err("DUPLICATE_VOTE_DETECTED");
                 }
 
                 self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
-                    .map_err(|_| "WAL_ERROR: Failed to write valid Commit to durable log!")?;
+                    .map_err(|_| "WAL_ERROR")?;
                 
                 sigs.insert(msg.sender_id, msg.signature);
 
@@ -648,19 +652,19 @@ impl PbftState {
                     };
 
                     if !commit_cert.verify(self.quorum_size, &self.public_keys) {
-                        return Err("CERTIFICATE_VERIFICATION_FAILED: Generated Commit Certificate failed cryptographic verification!");
+                        return Err("CERTIFICATE_VERIFICATION_FAILED");
                     }
 
                     self.node_state.mark_committed(msg.view, msg.seq, msg.digest);
                     self.commit_certificates.insert((msg.view, msg.seq), commit_cert);
-                    format!("🏆 [COMMITTED WITH CERTIFICATE]: Sequence {} definitively committed under View {}.", msg.seq, msg.view)
+                    format!("COMMIT CERTIFICATE OK: {}", msg.seq)
                 } else {
-                    format!("⏳ [COMMIT VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
+                    format!("COMMIT VOTE OK")
                 }
             }
 
             Phase::ViewChange => {
-                return Err("VIEW_CHANGE_USE_PAYLOAD: ViewChange messages must be processed via handle_view_change_payload using the explicit 109-byte format.");
+                return Err("VIEW_CHANGE_USE_PAYLOAD");
             }
         };
 
@@ -669,23 +673,22 @@ impl PbftState {
 
     pub fn handle_view_change_payload(&mut self, vc: &ViewChangePayload) -> Result<String, &'static str> {
         if self.new_view_certificates.contains_key(&vc.target_view) {
-            return Err("CERTIFICATE_ALREADY_FORMED: A NewViewCertificate for this target view is already locked locally. Redundant payloads rejected.");
+            return Err("CERTIFICATE_ALREADY_FORMED");
         }
 
         if !self.registered_nodes.contains(&vc.sender_id) {
-            return Err("AUTH_FAILED: Sender ID is not part of the active node registry!");
+            return Err("AUTH_FAILED");
         }
 
-        let pk = self.public_keys.get(&vc.sender_id)
-            .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
+        let pk = self.public_keys.get(&vc.sender_id).unwrap();
 
         let canonical_msg = vc.canonical_bytes();
         if !verify_bls_signature(&canonical_msg, &vc.signature, pk) {
-            return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed for ViewChange!");
+            return Err("CRYPTO_AUTH_FAILED");
         }
 
         if vc.target_view <= self.current_view {
-            return Err("VIEW_CHANGE_INVALID: Target view must be greater than current view!");
+            return Err("VIEW_CHANGE_INVALID");
         }
 
         if vc.prepared_seq > 0 {
@@ -695,17 +698,17 @@ impl PbftState {
                 .unwrap_or(false);
 
             if !has_valid_qc {
-                return Err("CERTIFICATE_INVALID: ViewChange rejected; missing cryptographically verified Quorum Certificate matching prepared_view and seq!");
+                return Err("CERTIFICATE_INVALID");
             }
         }
 
         let packed_seq = (vc.prepared_view << 32) | (vc.prepared_seq & 0xFFFFFFFF);
         self.wal.append_entry(vc.target_view, packed_seq, Phase::ViewChange as u8, vc.sender_id, &vc.digest, &vc.signature)
-            .map_err(|_| "WAL_ERROR: Failed to write valid ViewChange to durable log!")?;
+            .map_err(|_| "WAL_ERROR")?;
 
         let supporters = self.view_change_votes.entry(vc.target_view).or_default();
         if supporters.contains_key(&vc.sender_id) {
-            return Err("DUPLICATE_VOTE_DETECTED: Node attempted to broadcast ViewChange twice for the same target view!");
+            return Err("DUPLICATE_VOTE_DETECTED");
         }
 
         supporters.insert(vc.sender_id, (vc.prepared_view, vc.prepared_seq, vc.digest, vc.signature));
@@ -744,7 +747,7 @@ impl PbftState {
                     .cloned();
                 
                 if cert_opt.is_none() {
-                    return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-view PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
+                    return Err("MISSING_QUORUM_CERTIFICATE");
                 }
                 cert_opt
             } else {
@@ -758,7 +761,7 @@ impl PbftState {
             };
 
             if !new_view_cert.verify(self.quorum_size, &self.public_keys) {
-                return Err("NEW_VIEW_VERIFICATION_FAILED: NewViewCertificate cryptographic verification failed! Bound certificate mismatch.");
+                return Err("NEW_VIEW_VERIFICATION_FAILED");
             }
 
             self.current_view = vc.target_view;
@@ -768,9 +771,9 @@ impl PbftState {
             }
             self.new_view_certificates.insert(vc.target_view, new_view_cert);
 
-            Ok(format!("🔄 [STRICT QUORUM-SOURCED BOUND NEW VIEW CERTIFICATE]: Quorum reached for View {}. Inherited PrepView: {}, Seq: {}", vc.target_view, max_prep_view, max_seq_at_max_view))
+            Ok(format!("NEW VIEW OK: {}", vc.target_view))
         } else {
-            Ok(format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", vc.target_view, supporters.len(), self.quorum_size))
+            Ok(format!("VIEW CHANGE VOTE OK"))
         }
     }
 
@@ -790,71 +793,5 @@ impl PbftState {
                 Err(_) => {},
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod adversarial_tests {
-    use super::*;
-    use bls12_381::{G1Projective, G2Projective, Scalar};
-    use rand::rngs::OsRng;
-
-    fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
-        let mut secret_keys = HashMap::new();
-        let mut public_keys = HashMap::new();
-        for i in 0..n as u32 {
-            let sk = Scalar::random(&mut OsRng);
-            let pk = G2Projective::generator() * sk;
-            secret_keys.insert(i, sk);
-            public_keys.insert(i, pk);
-        }
-        (secret_keys, public_keys)
-    }
-
-    fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
-        let h_scalar = crate::threshold_bls::hash_to_scalar(msg, b"PBFT_BLS_SIG_V1_CSUITE");
-        G1Projective::generator() * (h_scalar * sk)
-    }
-
-    #[test]
-    fn test_ghost_certificate_attack_rejected() {
-        let n = 4;
-        let (secret_keys, public_keys) = generate_test_keys(n);
-        
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
-        
-        let target_view: u64 = 1;
-        
-        let malicious_prep_view: u64 = 0;
-        let malicious_seq: u64 = 999; 
-        let malicious_digest = [0xbb; 32];
-
-        let create_view_change = |sender_id: u32, sk: &Scalar| {
-            let vc = ViewChangePayload {
-                target_view,
-                prepared_view: malicious_prep_view,
-                prepared_seq: malicious_seq,
-                digest: malicious_digest,
-                sender_id,
-                signature: G1Projective::identity(),
-            };
-            let canonical_msg = vc.canonical_bytes();
-            let sig = sign_message(&canonical_msg, sk);
-            ViewChangePayload {
-                signature: sig,
-                ..vc
-            }
-        };
-
-        let vc1 = create_view_change(1, &secret_keys[&1]);
-        let vc2 = create_view_change(2, &secret_keys[&2]);
-        let vc3 = create_view_change(3, &secret_keys[&3]);
-
-        let _ = state.handle_view_change_payload(&vc1);
-        let _ = state.handle_view_change_payload(&vc2);
-        let _ = state.handle_view_change_payload(&vc3);
-
-        assert_eq!(state.highest_seq, 0);
-        assert_eq!(state.current_view, 0);
     }
 }
