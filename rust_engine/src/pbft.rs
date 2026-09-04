@@ -232,7 +232,8 @@ impl NewViewCertificate {
 
         for v in self.view_change_votes.values() {
             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-            let is_valid_claim = p_view == 0 || self.selected_prepared_certificate.as_ref()
+            // Mathematically precise genesis check: both view and seq must be 0
+            let is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
                 .map_or(false, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
 
             if is_valid_claim {
@@ -663,8 +664,6 @@ impl PbftState {
         supporters.insert(vc.sender_id, (vc.prepared_view, vc.prepared_seq, vc.digest, vc.signature));
 
         if supporters.len() >= self.quorum_size {
-            // BYZANTINE-RESISTANT FILTERING: 
-            // We ignore fake/phantom high views that aren't backed by a valid local certificate.
             let mut highest_valid_claim: Option<(u64, u64, [u8; 32])> = None;
 
             for v in supporters.values() {
@@ -800,7 +799,6 @@ mod adversarial_tests {
         let target_view: u64 = 1;
         
         // Attack scenario: Nodes send a malicious ViewChange with a massive sequence number
-        // but they have no cryptographic proof (PreparedCertificate) that this sequence exists.
         let malicious_prep_view: u64 = 0;
         let malicious_seq: u64 = 999; 
         let malicious_digest = [0xbb; 32];
@@ -830,8 +828,10 @@ mod adversarial_tests {
         let _ = state.handle_view_change_payload(&vc2);
         let _ = state.handle_view_change_payload(&vc3);
 
-        // Assert that the engine safely filtered the malicious sequence and defaulted to 0
+        // Assert that the engine safely filtered the malicious messages and did NOT advance the view
         assert_eq!(state.highest_seq, 0, "SAFETY VIOLATION: Engine accepted unbacked phantom sequence!");
-        assert_eq!(state.current_view, 1, "Engine failed to transition to the next view safely!");
+        
+        // FIX: The view MUST be 0 because the malicious payloads were completely discarded!
+        assert_eq!(state.current_view, 0, "Engine should remain in view 0 because all ViewChange claims were maliciously forged!");
     }
 }
