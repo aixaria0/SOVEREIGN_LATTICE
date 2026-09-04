@@ -12,6 +12,7 @@ pub struct NetworkNode {
 }
 
 impl NetworkNode {
+    #[allow(dead_code)]
     pub fn new(node_id: u32, address: SocketAddr, peers: HashMap<u32, SocketAddr>) -> Self {
         Self {
             node_id,
@@ -20,6 +21,7 @@ impl NetworkNode {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn start_listener(
         &self, 
         message_handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync + 'static>
@@ -45,6 +47,7 @@ impl NetworkNode {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         let peer_addr = self.peers.get(&target_id)
             .ok_or("NETWORK_ERROR: Target node address not found in peer registry!")?;
@@ -57,34 +60,5 @@ impl NetworkNode {
 
         println!("📤 [NODE {}]: Sent {} bytes to Node {}", self.node_id, payload.len(), target_id);
         Ok(())
-    }
-}
-
-/// Module-level free function matching main.rs import: use crate::network::start_tcp_listener;
-pub async fn start_tcp_listener(
-    address: &str,
-    state: Arc<tokio::sync::Mutex<crate::pbft::PbftState>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(address).await?;
-    println!("🎧 [LISTENER]: Starting TCP listener on {}", address);
-
-    loop {
-        let (mut socket, peer_addr) = listener.accept().await?;
-        let state_clone = Arc::clone(&state);
-
-        tokio::spawn(async move {
-            let mut len_buf = [0u8; 4];
-            if socket.read_exact(&mut len_buf).await.is_ok() {
-                let len = u32::from_be_bytes(len_buf) as usize;
-                let mut buffer = vec![0u8; len];
-                if socket.read_exact(&mut buffer).await.is_ok() {
-                    println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
-                    
-                    // Lock the consensus engine state and process the received message
-                    let mut pbft = state_clone.lock().await;
-                    pbft.process_network_message(&buffer);
-                }
-            }
-        });
     }
 }
