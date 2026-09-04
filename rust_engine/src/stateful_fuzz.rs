@@ -1,33 +1,28 @@
 use std::collections::HashMap;
-use bls12_381::{G2Projective, Scalar};
+use bls12_381::{G1Projective, G2Projective, Scalar};
 use ff::Field;
 use rand::rngs::OsRng;
 use crate::pbft::{PbftMessage, PbftState, Phase};
-use crate::threshold_bls::{sign_message, KeyPair};
 
-fn generate_test_keys(n: usize) -> (HashMap<u32, KeyPair>, HashMap<u32, G2Projective>) {
+fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
     let mut rng = OsRng;
-    let mut keypairs = HashMap::new();
+    let mut privkeys = HashMap::new();
     let mut pubkeys = HashMap::new();
 
     for id in 0..n as u32 {
         let sk = Scalar::random(&mut rng);
         let pk = G2Projective::generator() * sk;
-        let kp = KeyPair {
-            secret_key: sk,
-            public_key: pk,
-        };
         pubkeys.insert(id, pk);
-        keypairs.insert(id, kp);
+        privkeys.insert(id, sk);
     }
 
-    (keypairs, pubkeys)
+    (privkeys, pubkeys)
 }
 
 #[test]
 fn test_stateful_adversarial_simulation() {
     let n = 4;
-    let (keypairs, public_keys) = generate_test_keys(n);
+    let (privkeys, public_keys) = generate_test_keys(n);
 
     let mut nodes: HashMap<u32, PbftState> = HashMap::new();
     for i in 0..n as u32 {
@@ -46,8 +41,9 @@ fn test_stateful_adversarial_simulation() {
     prep_msg_bytes.extend_from_slice(&seq.to_be_bytes());
     prep_msg_bytes.extend_from_slice(&digest);
 
-    let leader_kp = &keypairs[&leader_id];
-    let leader_sig = sign_message(&prep_msg_bytes, &leader_kp.secret_key);
+    // BLS signature: H(m) * sk
+    let h = G1Projective::hash_to_curve(&prep_msg_bytes, b"SOVEREIGN_LATTICE_CIP01", b"BLS_SIG");
+    let leader_sig = h * privkeys[&leader_id];
 
     let pre_prepare_msg = PbftMessage {
         phase: Phase::PrePrepare,
