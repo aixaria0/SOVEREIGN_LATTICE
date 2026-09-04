@@ -8,3 +8,6 @@ pub mod wal;
 
 #[cfg(test)]
 mod fuzz_tests;
+
+#[cfg(test)]
+mod stateful_fuzz;
