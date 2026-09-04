@@ -805,11 +805,11 @@ mod adversarial_tests {
         hasher.update(msg);
         let hash = hasher.finalize();
         
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&hash);
+        let mut wide_bytes = [0u8; 64];
+        wide_bytes[..32].copy_from_slice(&hash);
         
-        let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
-        G1Projective::generator() * scalar_hash
+        let scalar = Scalar::from_bytes_wide(&wide_bytes);
+        G1Projective::generator() * scalar
     }
 
     fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
