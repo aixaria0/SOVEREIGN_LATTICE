@@ -3,7 +3,7 @@ use bls12_381::{G2Projective, Scalar};
 use ff::Field;
 use rand::rngs::OsRng;
 use crate::pbft::{PbftMessage, PbftState, Phase};
-use crate::threshold_bls::KeyPair;
+use crate::threshold_bls::{sign_message, KeyPair};
 
 fn generate_test_keys(n: usize) -> (HashMap<u32, KeyPair>, HashMap<u32, G2Projective>) {
     let mut rng = OsRng;
@@ -12,12 +12,12 @@ fn generate_test_keys(n: usize) -> (HashMap<u32, KeyPair>, HashMap<u32, G2Projec
 
     for id in 0..n as u32 {
         let sk = Scalar::random(&mut rng);
+        let pk = G2Projective::generator() * sk;
         let kp = KeyPair {
-            id,
             secret_key: sk,
-            public_key: G2Projective::generator() * sk,
+            public_key: pk,
         };
-        pubkeys.insert(id, kp.public_key);
+        pubkeys.insert(id, pk);
         keypairs.insert(id, kp);
     }
 
@@ -47,7 +47,7 @@ fn test_stateful_adversarial_simulation() {
     prep_msg_bytes.extend_from_slice(&digest);
 
     let leader_kp = &keypairs[&leader_id];
-    let leader_sig = leader_kp.sign(&prep_msg_bytes);
+    let leader_sig = sign_message(&prep_msg_bytes, &leader_kp.secret_key);
 
     let pre_prepare_msg = PbftMessage {
         phase: Phase::PrePrepare,
