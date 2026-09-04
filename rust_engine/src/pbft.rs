@@ -232,7 +232,6 @@ impl NewViewCertificate {
 
         for v in self.view_change_votes.values() {
             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-            // Mathematically precise genesis check: both view and seq must be 0
             let is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
                 .map_or(false, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
 
@@ -312,6 +311,8 @@ pub struct PbftState {
     registered_nodes: HashSet<u32>,
     pub public_keys: HashMap<u32, G2Projective>,
     wal: WriteAheadLog,
+    // [NEW]: Persistent lock enforcing NoEquivocationAcrossViews safety invariant
+    pub locked_digests: HashMap<u64, [u8; 32]>, 
 }
 
 impl PbftState {
@@ -353,6 +354,7 @@ impl PbftState {
         let mut recovered_commit_certificates = HashMap::new();
         let mut recovered_new_view_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
+        let mut recovered_locked_digests = HashMap::new();
 
         wal.replay_log(|view, seq_or_packed, phase_u8, sender_id, digest, signature| {
             if view > recovered_view { recovered_view = view; }
@@ -376,6 +378,8 @@ impl PbftState {
                         let cert = PreparedCertificate { view: prep_view, seq, digest, signatures: sigs.clone() };
                         if cert.verify(quorum_size, &initial_public_keys) {
                             recovered_certificates.insert((prep_view, seq), cert);
+                            // Recover lock for sequence safely prepared
+                            recovered_locked_digests.insert(seq, digest);
                         }
                     }
                 }
@@ -431,10 +435,14 @@ impl PbftState {
                             let nv_cert = NewViewCertificate {
                                 target_view: view,
                                 view_change_votes: supporters.clone(),
-                                selected_prepared_certificate: bound_cert,
+                                selected_prepared_certificate: bound_cert.clone(),
                             };
                             if nv_cert.verify(quorum_size, &initial_public_keys) {
                                 recovered_new_view_certificates.insert(view, nv_cert);
+                                // Recover lock inherited via view change
+                                if let Some(ref b_cert) = bound_cert {
+                                    recovered_locked_digests.insert(b_cert.seq, b_cert.digest);
+                                }
                             }
                         }
                     }
@@ -460,6 +468,7 @@ impl PbftState {
             registered_nodes,
             public_keys: initial_public_keys,
             wal,
+            locked_digests: recovered_locked_digests,
         })
     }
 
@@ -503,6 +512,17 @@ impl PbftState {
                     
                 if msg.seq > 0 && msg.seq <= last_globally_committed_seq {
                     return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to a GLOBALLY committed block!");
+                }
+
+                // =========================================================================
+                // [NEW SAFETY ENFORCEMENT]: Reject multi-view equivocation directly here!
+                // If the sequence was locked to a digest in ANY previous view, 
+                // the new PrePrepare MUST use exactly that same digest.
+                // =========================================================================
+                if let Some(locked_digest) = self.locked_digests.get(&msg.seq) {
+                    if locked_digest != &msg.digest {
+                        return Err("SAFETY_VIOLATION: Malicious PrePrepare! This sequence is permanently locked to a different digest from a previous view.");
+                    }
                 }
 
                 let has_equivocated = self.pre_prepared_proposals.iter()
@@ -558,7 +578,14 @@ impl PbftState {
                     }
 
                     self.prepared_certificates.insert((msg.view, msg.seq), cert);
-                    format!("✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}.", msg.view, msg.seq)
+
+                    // =========================================================================
+                    // [NEW SAFETY ENFORCEMENT]: Lock the sequence to this digest
+                    // Once a quorum is achieved in this view, we bind this sequence safely.
+                    // =========================================================================
+                    self.locked_digests.insert(msg.seq, msg.digest);
+
+                    format!("✅ [VERIFIED PREPARED CERTIFICATE]: Quorum achieved for View {} Seq {}. SEQUENCE LOCKED.", msg.view, msg.seq)
                 } else {
                     format!("⏳ [PREPARE VOTE]: Recorded from Node {}. Progress: {}/{}", msg.sender_id, sigs.len(), self.quorum_size)
                 }
@@ -717,6 +744,12 @@ impl PbftState {
             self.current_view = vc.target_view;
             if let Some(ref cert) = bound_cert {
                 self.highest_seq = self.highest_seq.max(cert.seq);
+                // =========================================================================
+                // [NEW SAFETY ENFORCEMENT]: Inherit lock on view change
+                // If a sequence had a Prepared Certificate from a previous view, 
+                // this state transition firmly binds and locks the state machine to it!
+                // =========================================================================
+                self.locked_digests.insert(cert.seq, cert.digest);
             }
             self.new_view_certificates.insert(vc.target_view, new_view_cert);
 
@@ -798,7 +831,6 @@ mod adversarial_tests {
         
         let target_view: u64 = 1;
         
-        // Attack scenario: Nodes send a malicious ViewChange with a massive sequence number
         let malicious_prep_view: u64 = 0;
         let malicious_seq: u64 = 999; 
         let malicious_digest = [0xbb; 32];
@@ -828,10 +860,7 @@ mod adversarial_tests {
         let _ = state.handle_view_change_payload(&vc2);
         let _ = state.handle_view_change_payload(&vc3);
 
-        // Assert that the engine safely filtered the malicious messages and did NOT advance the view
         assert_eq!(state.highest_seq, 0, "SAFETY VIOLATION: Engine accepted unbacked phantom sequence!");
-        
-        // FIX: The view MUST be 0 because the malicious payloads were completely discarded!
         assert_eq!(state.current_view, 0, "Engine should remain in view 0 because all ViewChange claims were maliciously forged!");
     }
 }
