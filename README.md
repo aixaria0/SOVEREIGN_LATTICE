@@ -50,6 +50,6 @@ The unique proposition of Sovereign Lattice is its rigorous approach to safety. 
 Any incoming network payload that violates the established topology, cryptographic bounds, or state sequence is deterministically dropped before it can mutate the state machine.
 📜 License
 
-
+Apache-2.0 license
 
 
