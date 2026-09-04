@@ -217,6 +217,9 @@ pub struct PbftState {
 
 impl PbftState {
     pub fn new(total_nodes: usize, initial_public_keys: HashMap<u32, G2Projective>) -> Result<Self, &'static str> {
+        if total_nodes < 4 {
+            return Err("TOPOLOGY_VIOLATION: Network size N must be at least 4 for PBFT (f >= 1).");
+        }
         let f = (total_nodes - 1) / 3;
         if total_nodes != 3 * f + 1 {
             return Err("TOPOLOGY_VIOLATION: Network size N must strictly satisfy N = 3f + 1!");
@@ -397,9 +400,16 @@ impl PbftState {
             }
 
             Phase::Prepare => {
+                if msg.view != self.current_view {
+                    return Err("VIEW_MISMATCH: Prepare view does not match current consensus view!");
+                }
+
                 let proposal_key = (msg.view, msg.seq, msg.digest);
+                if !self.pre_prepared_proposals.contains(&proposal_key) {
+                    return Err("PREPARE_WITHOUT_PREPREPARE: Prepare rejected; no valid PrePrepare exists for this digest.");
+                }
+
                 let sigs = self.prepare_votes.entry(proposal_key).or_default();
-                
                 if sigs.contains_key(&msg.sender_id) {
                     return Err("DUPLICATE_VOTE_DETECTED: Node attempted to vote twice for the same sequence!");
                 }
@@ -426,11 +436,17 @@ impl PbftState {
             }
 
             Phase::Commit => {
-                let has_valid_certificate = self.prepared_certificates.values()
-                    .any(|cert| cert.seq == msg.seq && cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys));
+                if msg.view != self.current_view {
+                    return Err("VIEW_MISMATCH: Commit view does not match current consensus view!");
+                }
+
+                let has_valid_certificate = self.prepared_certificates
+                    .get(&(msg.view, msg.seq))
+                    .map(|cert| cert.digest == msg.digest && cert.verify(self.quorum_size, &self.public_keys))
+                    .unwrap_or(false);
 
                 if !has_valid_certificate {
-                    return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Prepared Certificate!");
+                    return Err("SAFETY_VIOLATION: Node cannot commit without a cryptographically verified Prepared Certificate for THIS view!");
                 }
 
                 if let Some(existing_digest) = self.committed_digest.get(&(msg.view, msg.seq)) {
@@ -483,7 +499,6 @@ impl PbftState {
                 }
 
                 let supporters = self.view_change_votes.entry(msg.view).or_default();
-                
                 if supporters.contains_key(&msg.sender_id) {
                     return Err("DUPLICATE_VOTE_DETECTED: Node attempted to broadcast ViewChange twice for the same target view!");
                 }
@@ -491,13 +506,18 @@ impl PbftState {
                 supporters.insert(msg.sender_id, (msg.seq, msg.digest, msg.signature));
 
                 if supporters.len() >= self.quorum_size {
-                    self.current_view = msg.view;
-                    
                     let max_quorum_seq = supporters.values().map(|&(s, _, _)| s).max().unwrap_or(0);
-                    let best_digest = supporters.values()
-                        .find(|&&(s, _, _)| s == max_quorum_seq)
-                        .map(|&(_, d, _)| d)
-                        .unwrap_or([0u8; 32]);
+                    
+                    let digests_at_max: HashSet<[u8; 32]> = supporters.values()
+                        .filter(|&&(seq, _, _)| seq == max_quorum_seq)
+                        .map(|&(_, digest, _)| digest)
+                        .collect();
+
+                    if digests_at_max.len() > 1 {
+                        return Err("VIEW_CHANGE_CONFLICT: Conflicting digests reported for highest sequence! Halting NewView.");
+                    }
+                    
+                    let best_digest = *digests_at_max.iter().next().unwrap_or(&[0u8; 32]);
 
                     let bound_cert = if max_quorum_seq > 0 {
                         let cert_opt = self.prepared_certificates.values()
@@ -512,21 +532,22 @@ impl PbftState {
                         None
                     };
 
-                    if let Some(ref cert) = bound_cert {
-                        self.highest_seq = self.highest_seq.max(cert.seq);
-                    }
-
                     let new_view_cert = NewViewCertificate {
                         target_view: msg.view,
                         view_change_votes: supporters.clone(),
-                        selected_prepared_certificate: bound_cert,
+                        selected_prepared_certificate: bound_cert.clone(),
                     };
 
                     if !new_view_cert.verify(self.quorum_size, &self.public_keys) {
                         return Err("NEW_VIEW_VERIFICATION_FAILED: NewViewCertificate cryptographic verification failed! Bound certificate mismatch.");
                     }
 
+                    self.current_view = msg.view;
+                    if let Some(ref cert) = bound_cert {
+                        self.highest_seq = self.highest_seq.max(cert.seq);
+                    }
                     self.new_view_certificates.insert(msg.view, new_view_cert);
+
                     format!("🔄 [STRICT QUORUM-SOURCED BOUND NEW VIEW CERTIFICATE]: Quorum reached for View {}. Inherited Seq: {}", msg.view, max_quorum_seq)
                 } else {
                     format!("🔄 [VIEW CHANGE VOTE]: Recorded for View {}. Progress: {}/{}", msg.view, supporters.len(), self.quorum_size)
@@ -565,7 +586,7 @@ mod adversarial_tests {
     // TODO(CRYPTO-CORE): Implement strict RFC 9380 Hash-to-Curve using ExpandMsgXmd<sha2::Sha256>.
     // Current implementation uses a scalar multiplication stub combined with SHA-256 for adversarial state-machine testing.
     // DO NOT deploy to production without integrating the elliptic-curve::hash2curve traits.
-    
+
     fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
         let mut secret_keys = HashMap::new();
         let mut public_keys = HashMap::new();
