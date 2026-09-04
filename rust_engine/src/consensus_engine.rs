@@ -17,8 +17,9 @@ impl ConsensusEngine {
         }
     }
 
-    pub fn process_consensus_payload(&mut self, view: View, seq: u64, digest: Digest) -> Result<(), &'static str> {
-        self.state.mark_prepared(view, seq, digest)?;
-        self.state.mark_committed(view, seq, digest)
+    pub fn process_consensus_payload(&mut self, _view: View, _seq: u64, _digest: Digest) -> Result<(), &'static str> {
+        // SAFETY ENFORCEMENT: This bypass path is intentionally disabled to prevent unverified state commits.
+        // All state transitions must exclusively be routed through the cryptographic verification pipeline in PbftState.
+        Err("SAFETY_VIOLATION: Direct consensus payload processing is disabled. Use PbftState for verified state transitions.")
     }
 }
