@@ -366,6 +366,9 @@ impl PbftState {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
 
+        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
+            .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
+
         let response = match msg.phase {
             Phase::PrePrepare => {
                 if msg.view != self.current_view {
@@ -407,6 +410,11 @@ impl PbftState {
             Phase::Prepare => {
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 let sigs = self.prepare_votes.entry(proposal_key).or_default();
+                
+                if sigs.contains_key(&msg.sender_id) {
+                    return Err("DUPLICATE_VOTE_DETECTED: Node attempted to vote twice for the same sequence!");
+                }
+                
                 sigs.insert(msg.sender_id, msg.signature);
 
                 if sigs.len() >= self.quorum_size {
@@ -444,6 +452,11 @@ impl PbftState {
 
                 let proposal_key = (msg.view, msg.seq, msg.digest);
                 let sigs = self.commit_votes.entry(proposal_key).or_default();
+                
+                if sigs.contains_key(&msg.sender_id) {
+                    return Err("DUPLICATE_VOTE_DETECTED: Node attempted to commit twice for the same sequence!");
+                }
+                
                 sigs.insert(msg.sender_id, msg.signature);
 
                 if sigs.len() >= self.quorum_size {
@@ -527,9 +540,6 @@ impl PbftState {
             }
         };
 
-        self.wal.append_entry(msg.view, msg.seq, msg.phase as u8, msg.sender_id, &msg.digest, &msg.signature)
-            .map_err(|_| "WAL_ERROR: Failed to write valid consensus event to disk log!")?;
-
         Ok(response)
     }
 
@@ -556,6 +566,7 @@ mod adversarial_tests {
     use bls12_381::{G1Projective, G2Projective, Scalar};
     use rand::rngs::OsRng;
     use ff::Field;
+    use sha2::{Sha256, Digest};
 
     fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
         let mut secret_keys = HashMap::new();
@@ -569,8 +580,20 @@ mod adversarial_tests {
         (secret_keys, public_keys)
     }
 
-    fn sign_message(_msg: &[u8], sk: &Scalar) -> G1Projective {
-        G1Projective::generator() * sk
+    fn hash_to_curve(msg: &[u8]) -> G1Projective {
+        let mut hasher = Sha256::new();
+        hasher.update(msg);
+        let hash = hasher.finalize();
+        
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&hash);
+        
+        let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
+        G1Projective::generator() * scalar_hash
+    }
+
+    fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
+        hash_to_curve(msg) * sk
     }
 
     #[test]
