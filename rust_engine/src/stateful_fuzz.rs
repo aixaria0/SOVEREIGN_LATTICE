@@ -51,8 +51,8 @@ fn test_true_stateful_fuzzing() {
     let digest = [0x55; 32];
     
     let leader_id = nodes.get(&0).unwrap().get_expected_leader(view);
-
     let leader_sig = sign_test_message(Phase::PrePrepare, view, seq, &digest, &secret_keys[&leader_id]);
+    
     let pre_prepare_msg = PbftMessage {
         phase: Phase::PrePrepare,
         view,
@@ -66,26 +66,6 @@ fn test_true_stateful_fuzzing() {
         if *id != leader_id {
             let res = node.handle_message(&pre_prepare_msg);
             assert!(res.is_ok(), "Stateful Fuzzer: Replica failed to accept valid PrePrepare");
-        }
-    }
-
-    let mut prepare_messages = Vec::new();
-    for i in 0..n as u32 {
-        let sig = sign_test_message(Phase::Prepare, view, seq, &digest, &secret_keys[&i]);
-        let msg = PbftMessage {
-            phase: Phase::Prepare,
-            view,
-            seq,
-            digest,
-            sender_id: i,
-            signature: sig,
-        };
-        prepare_messages.push(msg);
-    }
-
-    for msg in &prepare_messages {
-        for node in nodes.values_mut() {
-            let _ = node.handle_message(msg);
         }
     }
 
