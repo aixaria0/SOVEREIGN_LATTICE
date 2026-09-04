@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -9,12 +11,12 @@ pub const MAX_FRAME_SIZE: usize = 109;
 
 pub struct NetworkNode {
     pub node_id: u32,
-    pub bind_addr: String,
-    pub peers: Vec<String>,
+    pub bind_addr: SocketAddr,
+    pub peers: HashMap<u32, SocketAddr>,
 }
 
 impl NetworkNode {
-    pub fn new(node_id: u32, bind_addr: String, peers: Vec<String>) -> Self {
+    pub fn new(node_id: u32, bind_addr: SocketAddr, peers: HashMap<u32, SocketAddr>) -> Self {
         Self {
             node_id,
             bind_addr,
@@ -23,8 +25,8 @@ impl NetworkNode {
     }
 }
 
-pub async fn start_tcp_listener(bind_addr: &str, state: Arc<Mutex<PbftState>>) {
-    let listener = TcpListener::bind(bind_addr).await.expect("Failed to bind TCP listener");
+pub async fn start_tcp_listener(bind_addr: SocketAddr, state: Arc<Mutex<PbftState>>) -> std::io::Result<()> {
+    let listener = TcpListener::bind(bind_addr).await?;
     println!("🚀 TCP Listener started on {}", bind_addr);
     
     loop {
