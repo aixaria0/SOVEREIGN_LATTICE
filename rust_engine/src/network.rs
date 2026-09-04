@@ -26,39 +26,7 @@ impl NetworkNode {
     where
         F: Fn(u32, Vec<u8>) + Send + Sync + 'static,
     {
-        let listener = TcpListener::bind(self.address).await?;
-        let handler = Arc::new(on_message);
-
-        tokio::spawn(async move {
-            loop {
-                let (mut socket, _) = match listener.accept().await {
-                    Ok(conn) => conn,
-                    Err(_) => break,
-                };
-
-                let handler_clone = Arc::clone(&handler);
-                tokio::spawn(async move {
-                    loop {
-                        let mut header = [0u8; 8];
-                        if socket.read_exact(&mut header).await.is_err() {
-                            break;
-                        }
-
-                        let sender_id = u32::from_be_bytes(header[0..4].try_into().unwrap());
-                        let len = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
-
-                        let mut payload = vec![0u8; len];
-                        if socket.read_exact(&mut payload).await.is_err() {
-                            break;
-                        }
-
-                        handler_clone(sender_id, payload);
-                    }
-                });
-            }
-        });
-
-        Ok(())
+        start_tcp_listener(self.address, on_message).await
     }
 
     pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -101,4 +69,46 @@ impl NetworkNode {
 
         results
     }
+}
+
+pub async fn start_tcp_listener<F>(
+    address: SocketAddr,
+    on_message: F,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    F: Fn(u32, Vec<u8>) + Send + Sync + 'static,
+{
+    let listener = TcpListener::bind(address).await?;
+    let handler = Arc::new(on_message);
+
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(_) => break,
+            };
+
+            let handler_clone = Arc::clone(&handler);
+            tokio::spawn(async move {
+                loop {
+                    let mut header = [0u8; 8];
+                    if socket.read_exact(&mut header).await.is_err() {
+                        break;
+                    }
+
+                    let sender_id = u32::from_be_bytes(header[0..4].try_into().unwrap());
+                    let len = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
+
+                    let mut payload = vec![0u8; len];
+                    if socket.read_exact(&mut payload).await.is_err() {
+                        break;
+                    }
+
+                    handler_clone(sender_id, payload);
+                }
+            });
+        }
+    });
+
+    Ok(())
 }
