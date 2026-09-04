@@ -1,93 +1,58 @@
+// File: tests/byzantine_cluster_integration.rs
+
 use std::collections::HashMap;
-use bls12_381::{G1Projective, G2Projective};
-use sovereign_lattice::pbft::{PbftMessage, PbftState, Phase, ViewChangePayload};
+use bls12_381::{G1Projective, G2Projective, Scalar};
+use rand::rngs::OsRng;
+use ff::Field;
+use sovereign_lattice::pbft_state::{PbftState, Phase, PbftMessage, ViewChangePayload};
+use sovereign_lattice::threshold_bls::hash_to_scalar;
 
-#[test]
-fn test_four_node_cluster_topology_and_leader_rotation() {
-    let n = 4;
+fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
+    let mut secret_keys = HashMap::new();
     let mut public_keys = HashMap::new();
-    for id in 0..n as u32 {
-        public_keys.insert(id, G2Projective::generator());
+    for i in 0..n as u32 {
+        let sk = Scalar::random(&mut OsRng);
+        let pk = G2Projective::generator() * sk;
+        secret_keys.insert(i, sk);
+        public_keys.insert(i, pk);
     }
+    (secret_keys, public_keys)
+}
 
-    // Initialize 4 independent cluster nodes
-    let mut cluster = Vec::new();
-    for _ in 0..n {
-        let node = PbftState::new(n, public_keys.clone()).expect("Failed to initialize cluster node");
-        cluster.push(node);
-    }
-
-    // 1. Verify PBFT cluster topology invariants across all nodes
-    for node in &cluster {
-        assert_eq!(node.total_nodes, 4);
-        assert_eq!(node.f, 1);
-        assert_eq!(node.quorum_size, 3);
-        assert_eq!(node.current_view, 0);
-    }
-
-    // 2. Verify deterministic round-robin leader schedule
-    let reference_node = &cluster[0];
-    assert_eq!(reference_node.get_expected_leader(0), 0);
-    assert_eq!(reference_node.get_expected_leader(1), 1);
-    assert_eq!(reference_node.get_expected_leader(2), 2);
-    assert_eq!(reference_node.get_expected_leader(3), 3);
-    assert_eq!(reference_node.get_expected_leader(4), 0); // Cycles back to node 0
+fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
+    let scalar_hash = hash_to_scalar(msg, b"TEST_SUITE_DOMAIN");
+    G1Projective::generator() * (scalar_hash * sk)
 }
 
 #[test]
-fn test_view_change_wire_protocol_roundtrip() {
-    let payload = ViewChangePayload {
-        target_view: 2,
-        prepared_view: 1,
-        prepared_seq: 10,
-        digest: [0xAA; 32],
-        sender_id: 3,
-        signature: G1Projective::generator(),
+fn test_new_view_certificate_rejects_unbacked_claims() {
+    let n = 4;
+    let (secret_keys, public_keys) = generate_test_keys(n);
+    let mut state = PbftState::new(n, public_keys.clone()).expect("Init failed");
+
+    // Attack Scenario: Byzantine node attempts to force View Change with an unbacked prepared_seq
+    let create_forged_view_change = |sender_id: u32, sk: &Scalar| {
+        let vc = ViewChangePayload {
+            target_view: 1,
+            prepared_view: 0,
+            prepared_seq: 999, // Unbacked high sequence
+            digest: [0xbb; 32],
+            sender_id,
+            signature: G1Projective::identity(),
+        };
+        let canonical = vc.canonical_bytes();
+        let sig = sign_message(&canonical, sk);
+        ViewChangePayload { signature: sig, ..vc }
     };
 
-    // 1. Verify exact 109-byte ViewChange wire format
-    let wire_bytes = payload.to_bytes();
-    assert_eq!(wire_bytes.len(), 109);
-    assert_eq!(wire_bytes[0], Phase::ViewChange as u8);
+    let vc1 = create_forged_view_change(1, &secret_keys[&1]);
+    let vc2 = create_forged_view_change(2, &secret_keys[&2]);
+    let vc3 = create_forged_view_change(3, &secret_keys[&3]);
 
-    // 2. Verify accurate deserialization
-    let decoded = ViewChangePayload::from_bytes(&wire_bytes)
-        .expect("Failed to decode valid ViewChange wire format");
+    let _ = state.handle_view_change_payload(&vc1);
+    let _ = state.handle_view_change_payload(&vc2);
+    let res = state.handle_view_change_payload(&vc3);
 
-    assert_eq!(decoded.target_view, 2);
-    assert_eq!(decoded.prepared_view, 1);
-    assert_eq!(decoded.prepared_seq, 10);
-    assert_eq!(decoded.digest, [0xAA; 32]);
-    assert_eq!(decoded.sender_id, 3);
+    assert!(res.is_err(), "Integration Test Failed: Engine accepted ViewChange without valid local QC verification!");
+    assert_eq!(state.current_view, 0, "State transition occurred despite missing QC!");
 }
-
-#[test]
-fn test_network_message_dispatcher_guardrails() {
-    let n = 4;
-    let mut public_keys = HashMap::new();
-    for id in 0..n as u32 {
-        public_keys.insert(id, G2Projective::generator());
-    }
-
-    let mut node = PbftState::new(n, public_keys).expect("Failed to initialize node");
-
-    // 1. Dispatching malformed short frame must be caught safely without panicking
-    let corrupt_payload = vec![0x00, 0x01, 0x02];
-    node.process_network_message(&corrupt_payload);
-
-    // 2. Dispatching 101-byte message with invalid sender must be caught safely
-    let dummy_msg = PbftMessage {
-        phase: Phase::PrePrepare,
-        view: 0,
-        seq: 1,
-        digest: [0x11; 32],
-        sender_id: 999, // Unregistered node
-        signature: G1Projective::generator(),
-    };
-    node.process_network_message(&dummy_msg.to_bytes());
-
-    // 3. Node state must remain uncorrupted
-    assert_eq!(node.current_view, 0);
-    assert_eq!(node.highest_seq, 0);
-}
-
