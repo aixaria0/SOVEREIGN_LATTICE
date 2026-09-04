@@ -232,10 +232,10 @@ impl NewViewCertificate {
 
         for v in self.view_change_votes.values() {
             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-            let Is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
+            let is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
                 .map_or(false, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
 
-            if Is_valid_claim {
+            if is_valid_claim {
                 if let Some(current) = highest_valid_claim {
                     if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
                         highest_valid_claim = Some((p_view, p_seq, p_digest));
@@ -400,7 +400,7 @@ impl PbftState {
 
                         for v in supporters.values() {
                             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-                            let Is_valid_claim = if p_view > 0 || p_seq > 0 {
+                            let is_valid_claim = if p_view > 0 || p_seq > 0 {
                                 recovered_certificates.get(&(p_view, p_seq))
                                     .map(|cert| cert.digest == p_digest && cert.verify(quorum_size, &initial_public_keys))
                                     .unwrap_or(false)
@@ -408,7 +408,7 @@ impl PbftState {
                                 true
                             };
 
-                            if Is_valid_claim {
+                            if is_valid_claim {
                                 if let Some(current) = highest_valid_claim {
                                     if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
                                         highest_valid_claim = Some((p_view, p_seq, p_digest));
@@ -695,7 +695,7 @@ impl PbftState {
             for v in supporters.values() {
                 let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
                 
-                let Is_valid_claim = if p_view > 0 || p_seq > 0 {
+                let is_valid_claim = if p_view > 0 || p_seq > 0 {
                     self.prepared_certificates.get(&(p_view, p_seq))
                         .map(|cert| cert.digest == p_digest && cert.verify(self.quorum_size, &self.public_keys))
                         .unwrap_or(false)
@@ -703,7 +703,7 @@ impl PbftState {
                     true
                 };
 
-                if Is_valid_claim {
+                if is_valid_claim {
                     if let Some(current) = highest_valid_claim {
                         if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
                             highest_valid_claim = Some((p_view, p_seq, p_digest));
@@ -889,7 +889,7 @@ mod adversarial_tests {
 
         assert!(node1_state.handle_message(&pre_prepare_msg).is_ok());
 
-        for sender in 0..3 {
+        for sender in 1..=3 {
             let prep_msg = {
                 let msg = PbftMessage {
                     phase: Phase::Prepare,
@@ -907,13 +907,14 @@ mod adversarial_tests {
                 let sig = sign_message(&canon, &secret_keys[&sender]);
                 PbftMessage { signature: sig, ..msg }
             };
-            assert!(node1_state.handle_message(&prep_msg).is_ok());
+            let res = node1_state.handle_message(&prep_msg);
+            assert!(res.is_ok(), "Prepare failed for sender {}: {:?}", sender, res.err());
         }
 
         assert_eq!(node1_state.locked_digests.get(&seq), Some(&digest_a));
 
         let target_view: u64 = 1;
-        for sender in 0..3 {
+        for sender in 1..=3 {
             let vc = ViewChangePayload {
                 target_view,
                 prepared_view: 0,
