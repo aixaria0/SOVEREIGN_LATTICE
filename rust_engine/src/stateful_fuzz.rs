@@ -51,8 +51,8 @@ fn test_stateful_adversarial_simulation() {
         nodes.insert(i, state);
     }
 
-    let view = 0;
-    let seq = 1;
+    let view: u64 = 0;
+    let seq: u64 = 1;
     let digest = [0x11; 32];
     let leader_id = 0;
 
