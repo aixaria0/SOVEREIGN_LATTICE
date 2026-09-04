@@ -22,22 +22,23 @@ fn test_adversarial_leader_equivocation_rejection() {
         view: 0,
         seq: 1,
         digest: digest_a,
-        sender_id: 0,
+        sender_id: 0, // Leader node ID
         signature: G1Projective::identity(),
     };
 
+    // First proposal should pass without a hitch
     assert!(pbft.handle_message(&proposal_a).is_ok());
 
+    // Second conflicting proposal for the exact same view and sequence must be rejected instantly
     let proposal_b = PbftMessage {
         phase: Phase::PrePrepare,
         view: 0,
         seq: 1,
         digest: digest_b,
-        sender_id: 0,
+        sender_id: 0, // Malicious leader trying to equivocate
         signature: G1Projective::identity(),
     };
 
     let result = pbft.handle_message(&proposal_b);
     assert!(result.is_err(), "Safety violation: Leader equivocation was incorrectly accepted by state machine!");
 }
-
