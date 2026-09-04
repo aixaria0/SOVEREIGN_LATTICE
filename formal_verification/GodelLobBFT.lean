@@ -146,3 +146,4 @@ theorem Multi_View_Safety {f : ℕ} (hN : N = 3 * f + 1)
     exact actual_no_equivocation_across_views hN Byzantine hByz network_state v1 v2 seq d1 d2 h_network_valid h_commit1 h_prep2
 
 end GodelLobBFT
+
