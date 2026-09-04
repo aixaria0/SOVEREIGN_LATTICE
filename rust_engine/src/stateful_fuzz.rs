@@ -19,18 +19,13 @@ fn test_hash_to_curve(msg: &[u8]) -> G1Projective {
     G1Projective::generator() * scalar
 }
 
-fn canonical_signing_bytes(phase: Phase, view: u64, seq: u64, digest: &[u8; 32]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.push(phase as u8);
-    bytes.extend_from_slice(&view.to_be_bytes());
-    bytes.extend_from_slice(&seq.to_be_bytes());
-    bytes.extend_from_slice(digest);
-    bytes
-}
-
 fn sign_test_message(phase: Phase, view: u64, seq: u64, digest: &[u8; 32], sk: &Scalar) -> G1Projective {
-    let bytes = canonical_signing_bytes(phase, view, seq, digest);
-    test_hash_to_curve(&bytes) * sk
+    let mut canonical_msg = Vec::new();
+    canonical_msg.push(phase as u8);
+    canonical_msg.extend_from_slice(&view.to_be_bytes());
+    canonical_msg.extend_from_slice(&seq.to_be_bytes());
+    canonical_msg.extend_from_slice(digest);
+    test_hash_to_curve(&canonical_msg) * sk
 }
 
 #[test]
