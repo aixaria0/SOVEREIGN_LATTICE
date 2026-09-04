@@ -1,14 +1,15 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 
-#[allow(dead_code)]
 pub struct NetworkNode {
     pub node_id: u32,
     pub address: SocketAddr,
     pub peers: HashMap<u32, SocketAddr>,
+    outbound_connections: Arc<Mutex<HashMap<u32, TcpStream>>>,
 }
 
 impl NetworkNode {
@@ -17,74 +18,87 @@ impl NetworkNode {
             node_id,
             address,
             peers,
+            outbound_connections: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub async fn start_listener(
-        &self, 
-        message_handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync + 'static>
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start_listener<F>(&self, on_message: F) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where
+        F: Fn(u32, Vec<u8>) + Send + Sync + 'static,
+    {
         let listener = TcpListener::bind(self.address).await?;
-        println!("🎧 [NODE {}]: Listening for P2P messages on {}", self.node_id, self.address);
-
-        loop {
-            let (mut socket, peer_addr) = listener.accept().await?;
-            let handler = Arc::clone(&message_handler);
-
-            tokio::spawn(async move {
-                let mut len_buf = [0u8; 4];
-                if socket.read_exact(&mut len_buf).await.is_ok() {
-                    let len = u32::from_be_bytes(len_buf) as usize;
-                    let mut buffer = vec![0u8; len];
-                    if socket.read_exact(&mut buffer).await.is_ok() {
-                        println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
-                        handler(0, buffer);
-                    }
-                }
-            });
-        }
-    }
-
-    pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-        let peer_addr = self.peers.get(&target_id)
-            .ok_or("NETWORK_ERROR: Target node address not found in peer registry!")?;
-
-        let mut stream = TcpStream::connect(peer_addr).await?;
-        
-        let len_bytes = (payload.len() as u32).to_be_bytes();
-        stream.write_all(&len_bytes).await?;
-        stream.write_all(payload).await?;
-
-        println!("📤 [NODE {}]: Sent {} bytes to Node {}", self.node_id, payload.len(), target_id);
-        Ok(())
-    }
-}
-
-/// Module-level free function matching main.rs import: use crate::network::start_tcp_listener;
-pub async fn start_tcp_listener(
-    address: &str,
-    state: Arc<tokio::sync::Mutex<crate::pbft::PbftState>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(address).await?;
-    println!("🎧 [LISTENER]: Starting TCP listener on {}", address);
-
-    loop {
-        let (mut socket, peer_addr) = listener.accept().await?;
-        let state_clone = Arc::clone(&state);
+        let handler = Arc::new(on_message);
 
         tokio::spawn(async move {
-            let mut len_buf = [0u8; 4];
-            if socket.read_exact(&mut len_buf).await.is_ok() {
-                let len = u32::from_be_bytes(len_buf) as usize;
-                let mut buffer = vec![0u8; len];
-                if socket.read_exact(&mut buffer).await.is_ok() {
-                    println!("📥 [NETWORK]: Received packet of {} bytes from {}", len, peer_addr);
-                    
-                    // Lock the consensus engine state and process the received message
-                    let mut pbft = state_clone.lock().await;
-                    pbft.process_network_message(&buffer);
-                }
+            loop {
+                let (mut socket, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+
+                let handler_clone = Arc::clone(&handler);
+                tokio::spawn(async move {
+                    loop {
+                        let mut header = [0u8; 8];
+                        if socket.read_exact(&mut header).await.is_err() {
+                            break;
+                        }
+
+                        let sender_id = u32::from_be_bytes(header[0..4].try_into().unwrap());
+                        let len = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
+
+                        let mut payload = vec![0u8; len];
+                        if socket.read_exact(&mut payload).await.is_err() {
+                            break;
+                        }
+
+                        handler_clone(sender_id, payload);
+                    }
+                });
             }
         });
+
+        Ok(())
+    }
+
+    pub async fn send_message(&self, target_id: u32, payload: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let peer_addr = self
+            .peers
+            .get(&target_id)
+            .copied()
+            .ok_or("Target node not registered in peer list")?;
+
+        let mut conns = self.outbound_connections.lock().await;
+
+        if !conns.contains_key(&target_id) {
+            let stream = TcpStream::connect(peer_addr).await?;
+            conns.insert(target_id, stream);
+        }
+
+        let stream = conns.get_mut(&target_id).unwrap();
+
+        let mut frame = Vec::with_capacity(8 + payload.len());
+        frame.extend_from_slice(&self.node_id.to_be_bytes());
+        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        frame.extend_from_slice(payload);
+
+        if let Err(e) = stream.write_all(&frame).await {
+            conns.remove(&target_id);
+            return Err(Box::new(e));
+        }
+
+        stream.flush().await?;
+        Ok(())
+    }
+
+    pub async fn broadcast(&self, payload: &[u8]) -> Vec<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        let peer_ids: Vec<u32> = self.peers.keys().copied().collect();
+        let mut results = Vec::new();
+
+        for peer_id in peer_ids {
+            results.push(self.send_message(peer_id, payload).await);
+        }
+
+        results
     }
 }
