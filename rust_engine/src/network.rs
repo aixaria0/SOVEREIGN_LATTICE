@@ -1,11 +1,44 @@
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use crate::pbft::{PbftMessage, PbftState, Phase, ViewChangePayload};
 
 // Maximum allowed frame size to prevent memory exhaustion attacks (ViewChange is max at 109 bytes)
 pub const MAX_FRAME_SIZE: usize = 109;
+
+pub struct NetworkNode {
+    pub node_id: u32,
+    pub bind_addr: String,
+    pub peers: Vec<String>,
+}
+
+impl NetworkNode {
+    pub fn new(node_id: u32, bind_addr: String, peers: Vec<String>) -> Self {
+        Self {
+            node_id,
+            bind_addr,
+            peers,
+        }
+    }
+}
+
+pub async fn start_tcp_listener(bind_addr: &str, state: Arc<Mutex<PbftState>>) {
+    let listener = TcpListener::bind(bind_addr).await.expect("Failed to bind TCP listener");
+    println!("🚀 TCP Listener started on {}", bind_addr);
+    
+    loop {
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                let state_clone = Arc::clone(&state);
+                tokio::spawn(async move {
+                    handle_connection(stream, state_clone).await;
+                });
+            }
+            Err(e) => eprintln!("Network accept error: {}", e),
+        }
+    }
+}
 
 pub async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<PbftState>>) {
     loop {
