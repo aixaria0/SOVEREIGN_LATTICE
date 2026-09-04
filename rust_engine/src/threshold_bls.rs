@@ -4,6 +4,14 @@ use ff::Field;
 use group::Curve;
 use sha2::{Digest, Sha256, Sha512};
 
+/// Canonical evaluation domain mapping ensuring strict synchronization across
+/// DKG share generation, Feldman VSS verification, and Lagrange interpolation
+/// (1-indexed to protect secret constant coefficient a_0 at x = 0).
+#[inline]
+pub fn evaluation_point(node_id: u32) -> Scalar {
+    Scalar::from((node_id + 1) as u64)
+}
+
 /// Derives a scalar without canonical modulo bias using SHA-512 wide reduction.
 pub fn hash_to_scalar(domain: &[u8], msg: &[u8]) -> Scalar {
     let mut hasher = Sha512::new();
@@ -17,7 +25,6 @@ pub fn hash_to_scalar(domain: &[u8], msg: &[u8]) -> Scalar {
 }
 
 /// Generates a strict Nothing-Up-My-Sleeve (NUMS) G2 point via Try-and-Increment.
-/// The discrete log relation between G2 and H is unknown, making it safe for Pedersen Commitments.
 pub fn get_nums_h_g2_generator() -> G2Projective {
     for counter in 0u32..10000 {
         let mut hasher = Sha256::new();
@@ -26,12 +33,10 @@ pub fn get_nums_h_g2_generator() -> G2Projective {
         let hash = hasher.finalize();
 
         let mut bytes = [0u8; 96];
-        // Mirror SHA256 over 96-byte compressed buffer for candidate G2 point
         bytes[0..32].copy_from_slice(&hash);
         bytes[32..64].copy_from_slice(&hash);
         bytes[64..96].copy_from_slice(&hash);
         
-        // Set compression flag (bit 7)
         bytes[0] |= 0x80;
 
         let opt_affine: Option<G2Affine> = G2Affine::from_compressed(&bytes).into();
@@ -42,8 +47,7 @@ pub fn get_nums_h_g2_generator() -> G2Projective {
             }
         }
     }
-    // Deterministic fallback to standard generator if search bounds expire
-    G2Projective::generator()
+    panic!("CRYPTOGRAPHIC_FAILURE: Failed to derive independent NUMS G2 generator within iteration bounds.");
 }
 
 /// Domain-separated G1 hash mapping using SHA-512 wide scalar reduction.
@@ -52,18 +56,19 @@ pub fn hash_to_curve(msg: &[u8]) -> G1Projective {
     G1Projective::generator() * scalar
 }
 
-/// Computes the Lagrange basis polynomial coefficient at x = 0 for node `i` over a set of participant indices.
+/// Computes the Lagrange basis polynomial coefficient at x = 0 for node `i` over a set of participant indices
+/// using the canonical 1-indexed evaluation domain.
 pub fn lagrange_coefficient_at_zero(i: u32, indices: &[u32]) -> Scalar {
     let mut num = Scalar::one();
     let mut den = Scalar::one();
 
-    let xi = Scalar::from(i as u64);
+    let xi = evaluation_point(i);
 
     for &j in indices {
         if j == i {
             continue;
         }
-        let xj = Scalar::from(j as u64);
+        let xj = evaluation_point(j);
         num *= xj;
         den *= xj - xi;
     }
@@ -131,7 +136,6 @@ pub fn verify_bls_signature(msg: &[u8], sig: &G1Projective, pk: &G2Projective) -
 }
 
 /// Verifies a threshold signature directly against an explicit master public key.
-/// Prevents sub-threshold ephemeral public key substitution attacks.
 pub fn verify_bound_threshold_signature(
     msg: &[u8],
     signatures: &HashMap<u32, G1Projective>,
