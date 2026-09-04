@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use bls12_381::{G1Projective, G2Projective, G1Affine};
+use group::Curve;
 use crate::threshold_bls::verify_bls_signature;
 use crate::wal::WriteAheadLog;
 
