@@ -887,7 +887,8 @@ mod adversarial_tests {
             PbftMessage { signature: sig, ..msg }
         };
 
-        assert!(node1_state.handle_message(&pre_prepare_msg).is_ok());
+        let pre_res = node1_state.handle_message(&pre_prepare_msg);
+        assert!(pre_res.is_ok(), "PrePrepare failed: {:?}", pre_res.err());
 
         for sender in 1..=3 {
             let prep_msg = {
@@ -926,7 +927,8 @@ mod adversarial_tests {
             let canon = vc.canonical_bytes();
             let sig = sign_message(&canon, &secret_keys[&sender]);
             let signed_vc = ViewChangePayload { signature: sig, ..vc };
-            assert!(node1_state.handle_view_change_payload(&signed_vc).is_ok());
+            let vc_res = node1_state.handle_view_change_payload(&signed_vc);
+            assert!(vc_res.is_ok(), "ViewChange failed for sender {}: {:?}", sender, vc_res.err());
         }
 
         assert_eq!(node1_state.current_view, 1);
