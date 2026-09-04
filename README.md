@@ -48,6 +48,9 @@ cargo run --release
 🛡️ Security & Formal Verification
 The unique proposition of Sovereign Lattice is its rigorous approach to safety. The system does not rely solely on unit tests; its core logic is subjected to Lean 4 formal verification.
 Any incoming network payload that violates the established topology, cryptographic bounds, or state sequence is deterministically dropped before it can mutate the state machine.
+
+Aixaria, Aria Fani
+
 📜 License
 
 Apache-2.0 license
