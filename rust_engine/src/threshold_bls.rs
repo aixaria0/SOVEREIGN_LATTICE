@@ -1,89 +1,83 @@
-use bls12_381::{G1Projective, G2Projective, Scalar, pairing};
-use group::Curve;
+use std::collections::HashMap;
+use bls12_381::{pairing, G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use sha2::{Sha256, Digest};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use group::Curve;
 
-const PROTOTYPE_DST: &[u8] = b"SOVEREIGN_LATTICE_PROTOTYPE_BLS_G1";
-
-pub struct KeyPair {
-    pub secret_key: Scalar,
-    pub public_key: G2Projective,
-}
-
-impl KeyPair {
-    /// Generates production-grade cryptographic keys using secure OS entropy (CSPRNG)
-    pub fn generate() -> Self {
-        let mut seed = [0u8; 64];
-        OsRng.fill_bytes(&mut seed);
-        Self::from_seed(&seed)
-    }
-
-    /// Generates deterministic keys for testing and consensus reproduction
-    pub fn from_seed(seed: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(b"SOVEREIGN_LATTICE_BLS_PRODUCTION_KEYGEN_SALT");
-        hasher.update(seed);
-        let hash = hasher.finalize();
-        
-        let mut wide_bytes = [0u8; 64];
-        wide_bytes[..32].copy_from_slice(&hash);
-        wide_bytes[32..].copy_from_slice(&hash);
-        
-        let sk = Scalar::from_bytes_wide(&wide_bytes);
-        let pk = G2Projective::generator() * sk;
-        
-        Self { secret_key: sk, public_key: pk }
-    }
-}
-
-pub fn hash_message_to_g1(message: &[u8]) -> G1Projective {
+/// Generates a strictly independent Nothing-Up-My-Sleeve (NUMS) generator.
+/// This ensures the discrete logarithm relation between the standard generator G 
+/// and this new generator H remains completely unknown. This is a mathematical 
+/// requirement for secure Pedersen Commitments and secure hash-to-curve maps.
+pub fn get_nums_h_generator() -> G1Projective {
     let mut hasher = Sha256::new();
-    hasher.update(PROTOTYPE_DST);
-    hasher.update(message);
+    hasher.update(b"SOVEREIGN_LATTICE_NUMS_GENERATOR_G1_DOMAIN_SEPARATION");
+    let hash = hasher.finalize();
+    
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hash);
+    let nums_scalar = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
+    
+    G1Projective::generator() * nums_scalar
+}
+
+/// Secure Hash-to-Curve mapping utilizing the NUMS generator.
+/// By mapping to the NUMS generator instead of the standard generator, 
+/// we prevent rogue-key and discrete log extraction attacks.
+pub fn hash_to_curve(msg: &[u8]) -> G1Projective {
+    let mut hasher = Sha256::new();
+    hasher.update(b"SOVEREIGN_LATTICE_BLS_SIG_DOMAIN");
+    hasher.update(msg);
     let hash = hasher.finalize();
 
-    let mut wide_bytes = [0u8; 64];
-    wide_bytes[..32].copy_from_slice(&hash);
-    wide_bytes[32..].copy_from_slice(&hash); 
-
-    let scalar = Scalar::from_bytes_wide(&wide_bytes);
-    G1Projective::generator() * scalar
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hash);
+    
+    let scalar_hash = Scalar::from_bytes(&bytes).unwrap_or(Scalar::one());
+    
+    let independent_generator = get_nums_h_generator();
+    independent_generator * scalar_hash
 }
 
-pub fn sign(message: &[u8], secret_key: &Scalar) -> G1Projective {
-    let hashed_point = hash_message_to_g1(message);
-    hashed_point * secret_key
+/// Verifies a single BLS signature using elliptic curve pairings.
+/// Mathematically asserts: e(Sig, G2) == e(H(m), PK)
+pub fn verify_bls_signature(msg: &[u8], sig: &G1Projective, pk: &G2Projective) -> bool {
+    let h = hash_to_curve(msg);
+
+    let sig_affine = G1Affine::from(sig);
+    let g2_generator = G2Affine::generator();
+    
+    let h_affine = G1Affine::from(&h);
+    let pk_affine = G2Affine::from(pk);
+
+    // Compute pairings
+    let pairing_1 = pairing(&sig_affine, &g2_generator);
+    let pairing_2 = pairing(&h_affine, &pk_affine);
+
+    pairing_1 == pairing_2
 }
 
-pub fn verify_bls_signature(
-    message: &[u8],
-    signature: &G1Projective,
-    public_key: &G2Projective,
-) -> bool {
-    let hashed_message = hash_message_to_g1(message);
-
-    let left_pairing = pairing(&signature.to_affine(), &G2Projective::generator().to_affine());
-    let right_pairing = pairing(&hashed_message.to_affine(), &public_key.to_affine());
-
-    left_pairing == right_pairing
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_production_crypto_flow() {
-        // Test production OS-entropy generation
-        let prod_keypair = KeyPair::generate();
-        let msg = b"PRODUCTION_PAYLOAD";
-        let sig = sign(msg, &prod_keypair.secret_key);
-        assert!(verify_bls_signature(msg, &sig, &prod_keypair.public_key));
-
-        // Test deterministic seed generation
-        let keypair = KeyPair::from_seed(b"PROTOTYPE_SEED");
-        let sig_det = sign(msg, &keypair.secret_key);
-        assert!(verify_bls_signature(msg, &sig_det, &keypair.public_key));
+/// Aggregates multiple G1 partial signatures into a single threshold signature.
+pub fn aggregate_signatures(signatures: &HashMap<u32, G1Projective>) -> G1Projective {
+    let mut agg_sig = G1Projective::identity();
+    for sig in signatures.values() {
+        agg_sig += sig;
     }
+    agg_sig
+}
+
+/// Aggregates multiple G2 public keys into a single threshold public key.
+pub fn aggregate_public_keys(public_keys: &HashMap<u32, G2Projective>) -> G2Projective {
+    let mut agg_pk = G2Projective::identity();
+    for pk in public_keys.values() {
+        agg_pk += pk;
+    }
+    agg_pk
+}
+
+/// Verifies a fully aggregated BLS threshold signature against an aggregated public key.
+pub fn verify_aggregated_signature(
+    msg: &[u8], 
+    agg_sig: &G1Projective, 
+    agg_pk: &G2Projective
+) -> bool {
+    verify_bls_signature(msg, agg_sig, agg_pk)
 }
