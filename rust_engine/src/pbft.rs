@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use bls12_381::{G1Projective, G2Projective};
+use bls12_381::{G1Projective, G2Projective, G1Affine};
 use crate::threshold_bls::verify_bls_signature;
 use crate::wal::WriteAheadLog;
 
@@ -19,6 +19,63 @@ pub struct PbftMessage {
     pub digest: [u8; 32],
     pub sender_id: u32,
     pub signature: G1Projective,
+}
+
+impl PbftMessage {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(101);
+        bytes.push(self.phase as u8);
+        bytes.extend_from_slice(&self.view.to_be_bytes());
+        bytes.extend_from_slice(&self.seq.to_be_bytes());
+        bytes.extend_from_slice(&self.digest);
+        bytes.extend_from_slice(&self.sender_id.to_be_bytes());
+        bytes.extend_from_slice(&self.signature.to_affine().to_compressed());
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() != 101 {
+            return Err("INVALID_PAYLOAD_SIZE: Expected exactly 101 bytes for PBFT Message.");
+        }
+        
+        let phase = match bytes[0] {
+            0 => Phase::PrePrepare,
+            1 => Phase::Prepare,
+            2 => Phase::Commit,
+            3 => Phase::ViewChange,
+            _ => return Err("INVALID_PHASE: Byte does not match any known consensus phase."),
+        };
+        
+        let mut view_bytes = [0u8; 8];
+        view_bytes.copy_from_slice(&bytes[1..9]);
+        let view = u64::from_be_bytes(view_bytes);
+
+        let mut seq_bytes = [0u8; 8];
+        seq_bytes.copy_from_slice(&bytes[9..17]);
+        let seq = u64::from_be_bytes(seq_bytes);
+
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&bytes[17..49]);
+
+        let mut sender_bytes = [0u8; 4];
+        sender_bytes.copy_from_slice(&bytes[49..53]);
+        let sender_id = u32::from_be_bytes(sender_bytes);
+
+        let mut sig_bytes = [0u8; 48];
+        sig_bytes.copy_from_slice(&bytes[53..101]);
+        
+        let affine_opt: Option<G1Affine> = G1Affine::from_compressed(&sig_bytes).into();
+        let signature = affine_opt.map(G1Projective::from).ok_or("INVALID_SIGNATURE_BYTES: Failed to decompress BLS signature.")?;
+
+        Ok(Self {
+            phase,
+            view,
+            seq,
+            digest,
+            sender_id,
+            signature,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -87,7 +144,6 @@ impl CommitCertificate {
     }
 }
 
-/// Fully Cryptographically Bound NewView Certificate with Quorum-Sourced Evidence
 #[derive(Clone)]
 pub struct NewViewCertificate {
     pub target_view: u64,
@@ -459,16 +515,18 @@ impl PbftState {
         Ok(response)
     }
 
-    /// Receives network messages and processes them through the consensus engine
     pub fn process_network_message(&mut self, payload: &[u8]) {
-        // Placeholder for network deserialization logic (e.g., bincode or serde)
-        // Future updates will deserialize the payload into a PbftMessage and route it to self.handle_message()
-        match std::str::from_utf8(payload) {
-            Ok(msg_str) => {
-                println!("🧩 [PBFT ENGINE]: Parsing message payload: {}", msg_str);
+        println!("🧩 [NETWORK->PBFT]: Received {} bytes. Starting safe deserialization...", payload.len());
+        
+        match PbftMessage::from_bytes(payload) {
+            Ok(msg) => {
+                match self.handle_message(&msg) {
+                    Ok(log) => println!("{}", log),
+                    Err(e) => eprintln!("⚠️ [CONSENSUS REJECTED]: {}", e),
+                }
             },
-            Err(_) => {
-                eprintln!("❌ [PBFT ENGINE]: Payload is raw binary or invalid UTF-8. Requires structure deserialization.");
+            Err(e) => {
+                eprintln!("❌ [NETWORK PARSE ERROR]: {}", e);
             }
         }
     }
