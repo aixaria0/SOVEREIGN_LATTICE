@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use bls12_381::{G1Projective, G2Projective, Scalar};
+use bls12_381::{G1Projective, G2Projective, G2Affine, Scalar};
 use ff::Field;
 use sha2::{Sha512, Digest};
 use group::Curve;
@@ -11,7 +11,7 @@ pub fn hash_to_scalar(msg: &[u8], dst: &[u8]) -> Scalar {
     let hash = hasher.finalize();
     
     let mut wide_bytes = [0u8; 64];
-    wide_bytes.copy_from_slice(&hash);
+    wide_bytes.copy_from_slice(&hash[0..64]);
     
     Scalar::from_bytes_wide(&wide_bytes)
 }
@@ -60,50 +60,38 @@ pub fn reconstruct_threshold_signature(
     Ok(master_sig)
 }
 
-pub fn reconstruct_threshold_public_key(
-    public_keys: &HashMap<u32, G2Projective>,
-    threshold: usize,
-    participants: &[u32]
-) -> Result<G2Projective, &'static str> {
-    if participants.len() < threshold {
-        return Err("THRESHOLD_NOT_MET");
-    }
-    
-    let mut master_pk = G2Projective::identity();
-
-    for &i in participants {
-        if let Some(pk_i) = public_keys.get(&i) {
-            let lambda_i = lagrange_basis_at_zero(i, participants);
-            master_pk += pk_i * lambda_i;
-        } else {
-            return Err("MISSING_PUBKEY");
-        }
-    }
-
-    Ok(master_pk)
-}
-
 pub fn independent_nums_g2_generator() -> G2Projective {
-    let scalar = hash_to_scalar(b"SOVEREIGN_LATTICE_VSS_GENERATOR", b"NUMS_DOMAIN");
-    G2Projective::generator() * scalar
+    let mut counter = 0u32;
+    loop {
+        let mut hasher = Sha512::new();
+        hasher.update(b"SOVEREIGN_LATTICE_VSS_GENERATOR");
+        hasher.update(&counter.to_le_bytes());
+        let hash = hasher.finalize();
+        
+        let mut bytes = [0u8; 96];
+        bytes[0..64].copy_from_slice(&hash[0..64]);
+        bytes[0] |= 0xc0; 
+        
+        let affine_opt = G2Affine::from_compressed(&bytes);
+        if bool::from(affine_opt.is_some()) {
+            let affine = affine_opt.unwrap();
+            if bool::from(affine.is_on_curve()) && bool::from(affine.is_torsion_free()) {
+                return G2Projective::from(affine);
+            }
+        }
+        counter += 1;
+    }
 }
 
 pub fn verify_threshold_signature(
     msg: &[u8], 
     dst: &[u8], 
     signatures: &HashMap<u32, G1Projective>, 
-    public_keys: &HashMap<u32, G2Projective>,
+    master_public_key: &G2Projective,
     threshold: usize
 ) -> bool {
     let master_sig = match reconstruct_threshold_signature(signatures, threshold) {
         Ok(sig) => sig,
-        Err(_) => return false,
-    };
-    
-    let participants: Vec<u32> = signatures.keys().copied().take(threshold).collect();
-    
-    let master_pk = match reconstruct_threshold_public_key(public_keys, threshold, &participants) {
-        Ok(pk) => pk,
         Err(_) => return false,
     };
 
@@ -111,7 +99,7 @@ pub fn verify_threshold_signature(
     let h = G1Projective::generator() * h_scalar; 
 
     let p1 = bls12_381::pairing(&master_sig.to_affine(), &G2Projective::generator().to_affine());
-    let p2 = bls12_381::pairing(&h.to_affine(), &master_pk.to_affine());
+    let p2 = bls12_381::pairing(&h.to_affine(), &master_public_key.to_affine());
     
     p1 == p2
 }
