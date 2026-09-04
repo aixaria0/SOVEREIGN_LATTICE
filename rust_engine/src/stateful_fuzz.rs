@@ -10,8 +10,11 @@ fn test_stateful_adversarial_simulation() {
         public_keys.insert(i, G2Projective::generator());
     }
 
-    // Initialize the PBFT state machine
-    let state_res = PbftState::new(n, public_keys);
+    // Inject a dummy master public key to satisfy the test environment
+    let master_pk = G2Projective::generator();
+
+    // Initialize the PBFT state machine with the newly required master_pk argument
+    let state_res = PbftState::new(n, public_keys, master_pk);
     assert!(state_res.is_ok(), "PBFT cluster initialization failed");
 
     let state = state_res.unwrap();
