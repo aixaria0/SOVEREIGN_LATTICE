@@ -458,6 +458,20 @@ impl PbftState {
 
         Ok(response)
     }
+
+    /// Receives network messages and processes them through the consensus engine
+    pub fn process_network_message(&mut self, payload: &[u8]) {
+        // Placeholder for network deserialization logic (e.g., bincode or serde)
+        // Future updates will deserialize the payload into a PbftMessage and route it to self.handle_message()
+        match std::str::from_utf8(payload) {
+            Ok(msg_str) => {
+                println!("🧩 [PBFT ENGINE]: Parsing message payload: {}", msg_str);
+            },
+            Err(_) => {
+                eprintln!("❌ [PBFT ENGINE]: Payload is raw binary or invalid UTF-8. Requires structure deserialization.");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
