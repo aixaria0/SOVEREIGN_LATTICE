@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use bls12_381::{G1Projective, G2Projective, G1Affine};
 use group::Curve;
 use crate::threshold_bls::verify_bls_signature;
 use crate::wal::WriteAheadLog;
+
+static TEST_WAL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -225,16 +228,17 @@ impl NewViewCertificate {
             return false;
         }
 
-        let max_prep_view = self.view_change_votes.values().map(|&(pv, _, _, _)| pv).max().unwrap_or(0);
+        // Safe indexing avoids destructuring move errors
+        let max_prep_view = self.view_change_votes.values().map(|v| v.0).max().unwrap_or(0);
         let max_seq_at_max_view = self.view_change_votes.values()
-            .filter(|&&(pv, _, _, _)| pv == max_prep_view)
-            .map(|&(_, s, _, _)| s)
+            .filter(|v| v.0 == max_prep_view)
+            .map(|v| v.1)
             .max()
             .unwrap_or(0);
 
         let best_digest = self.view_change_votes.values()
-            .filter(|&&(pv, s, _, _)| pv == max_prep_view && s == max_seq_at_max_view)
-            .map(|&(_, _, d, _)| d)
+            .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
+            .map(|v| v.2)
             .next()
             .unwrap_or([0u8; 32]);
 
@@ -252,19 +256,19 @@ impl NewViewCertificate {
         }
 
         let mut valid_count = 0;
-        for (&node_id, &(prep_view, seq, digest, ref sig)) in &self.view_change_votes {
+        for (&node_id, vote_data) in &self.view_change_votes {
             if let Some(pk) = public_keys.get(&node_id) {
                 let vc_payload = ViewChangePayload {
                     target_view: self.target_view,
-                    prepared_view: prep_view,
-                    prepared_seq: seq,
-                    digest,
+                    prepared_view: vote_data.0,
+                    prepared_seq: vote_data.1,
+                    digest: vote_data.2,
                     sender_id: node_id,
-                    signature: sig.clone(),
+                    signature: vote_data.3.clone(),
                 };
                 let canonical_msg = vc_payload.canonical_bytes();
 
-                if verify_bls_signature(&canonical_msg, sig, pk) {
+                if verify_bls_signature(&canonical_msg, &vote_data.3, pk) {
                     valid_count += 1;
                 }
             }
@@ -324,8 +328,10 @@ impl PbftState {
             }
         }
 
+        // Fix File Contention: Guarantee perfectly unique files for parallel cluster simulations
         let wal_path = if cfg!(test) {
-            format!("consensus_wal_{:?}.log", std::thread::current().id())
+            let count = TEST_WAL_COUNTER.fetch_add(1, Ordering::SeqCst);
+            format!("consensus_wal_test_{}_{:?}.log", count, std::thread::current().id())
         } else {
             "consensus_wal.log".to_string()
         };
@@ -385,16 +391,16 @@ impl PbftState {
                     let supporters = recovered_view_change_votes.entry(view).or_default();
                     supporters.insert(sender_id, (prep_view, seq, digest, signature));
                     if supporters.len() >= quorum_size {
-                        let max_prep_view = supporters.values().map(|&(pv, _, _, _)| pv).max().unwrap_or(0);
+                        let max_prep_view = supporters.values().map(|v| v.0).max().unwrap_or(0);
                         let max_seq_at_max_view = supporters.values()
-                            .filter(|&&(pv, _, _, _)| pv == max_prep_view)
-                            .map(|&(_, s, _, _)| s)
+                            .filter(|v| v.0 == max_prep_view)
+                            .map(|v| v.1)
                             .max()
                             .unwrap_or(0);
 
                         let best_digest = supporters.values()
-                            .filter(|&&(pv, s, _, _)| pv == max_prep_view && s == max_seq_at_max_view)
-                            .map(|&(_, _, d, _)| d)
+                            .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
+                            .map(|v| v.2)
                             .next()
                             .unwrap_or([0u8; 32]);
 
@@ -643,16 +649,16 @@ impl PbftState {
         supporters.insert(vc.sender_id, (vc.prepared_view, vc.prepared_seq, vc.digest, vc.signature));
 
         if supporters.len() >= self.quorum_size {
-            let max_prep_view = supporters.values().map(|&(pv, _, _, _)| pv).max().unwrap_or(0);
+            let max_prep_view = supporters.values().map(|v| v.0).max().unwrap_or(0);
             let max_seq_at_max_view = supporters.values()
-                .filter(|&&(pv, _, _, _)| pv == max_prep_view)
-                .map(|&(_, s, _, _)| s)
+                .filter(|v| v.0 == max_prep_view)
+                .map(|v| v.1)
                 .max()
                 .unwrap_or(0);
 
             let digests_at_max: HashSet<[u8; 32]> = supporters.values()
-                .filter(|&&(pv, s, _, _)| pv == max_prep_view && s == max_seq_at_max_view)
-                .map(|&(_, _, digest, _)| digest)
+                .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
+                .map(|v| v.2)
                 .collect();
 
             if digests_at_max.len() > 1 {
@@ -798,16 +804,16 @@ mod adversarial_tests {
         supporters.insert(2, (malicious_prep_view, malicious_seq, malicious_digest, vc2.signature));
         supporters.insert(3, (malicious_prep_view, malicious_seq, malicious_digest, vc3.signature));
 
-        let max_prep_view = supporters.values().map(|&(pv, _, _, _)| pv).max().unwrap_or(0);
+        let max_prep_view = supporters.values().map(|v| v.0).max().unwrap_or(0);
         let max_seq_at_max_view = supporters.values()
-            .filter(|&&(pv, _, _, _)| pv == max_prep_view)
-            .map(|&(_, s, _, _)| s)
+            .filter(|v| v.0 == max_prep_view)
+            .map(|v| v.1)
             .max()
             .unwrap_or(0);
 
         let best_digest = supporters.values()
-            .filter(|&&(pv, s, _, _)| pv == max_prep_view && s == max_seq_at_max_view)
-            .map(|&(_, _, d, _)| d)
+            .filter(|v| v.0 == max_prep_view && v.1 == max_seq_at_max_view)
+            .map(|v| v.2)
             .next()
             .unwrap_or([0u8; 32]);
 
