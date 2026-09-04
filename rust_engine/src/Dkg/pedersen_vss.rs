@@ -1,5 +1,3 @@
-// File: src/pedersen_vss.rs
-
 use bls12_381::{G2Projective, Scalar};
 use rand::rngs::OsRng;
 use ff::Field;
@@ -14,7 +12,6 @@ impl PedersenCommitment {
     pub fn new() -> Self {
         Self {
             g: G2Projective::generator(),
-            // Securely uses the true NUMS generator without exposing the discrete log
             h: independent_nums_g2_generator(),
         }
     }
@@ -25,5 +22,11 @@ impl PedersenCommitment {
 
     pub fn generate_blinding_factor() -> Scalar {
         Scalar::random(&mut OsRng)
+    }
+}
+
+impl Default for PedersenCommitment {
+    fn default() -> Self {
+        Self::new()
     }
 }
