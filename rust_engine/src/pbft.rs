@@ -232,10 +232,10 @@ impl NewViewCertificate {
 
         for v in self.view_change_votes.values() {
             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-            let is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
+            let Is_valid_claim = (p_view == 0 && p_seq == 0) || self.selected_prepared_certificate.as_ref()
                 .map_or(false, |cert| cert.view == p_view && cert.seq == p_seq && cert.digest == p_digest);
 
-            if is_valid_claim {
+            if Is_valid_claim {
                 if let Some(current) = highest_valid_claim {
                     if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
                         highest_valid_claim = Some((p_view, p_seq, p_digest));
@@ -400,7 +400,7 @@ impl PbftState {
 
                         for v in supporters.values() {
                             let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
-                            let is_valid_claim = if p_view > 0 || p_seq > 0 {
+                            let Is_valid_claim = if p_view > 0 || p_seq > 0 {
                                 recovered_certificates.get(&(p_view, p_seq))
                                     .map(|cert| cert.digest == p_digest && cert.verify(quorum_size, &initial_public_keys))
                                     .unwrap_or(false)
@@ -408,7 +408,7 @@ impl PbftState {
                                 true
                             };
 
-                            if is_valid_claim {
+                            if Is_valid_claim {
                                 if let Some(current) = highest_valid_claim {
                                     if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
                                         highest_valid_claim = Some((p_view, p_seq, p_digest));
@@ -695,7 +695,7 @@ impl PbftState {
             for v in supporters.values() {
                 let (p_view, p_seq, p_digest) = (v.0, v.1, v.2);
                 
-                let is_valid_claim = if p_view > 0 || p_seq > 0 {
+                let Is_valid_claim = if p_view > 0 || p_seq > 0 {
                     self.prepared_certificates.get(&(p_view, p_seq))
                         .map(|cert| cert.digest == p_digest && cert.verify(self.quorum_size, &self.public_keys))
                         .unwrap_or(false)
@@ -703,7 +703,7 @@ impl PbftState {
                     true
                 };
 
-                if is_valid_claim {
+                if Is_valid_claim {
                     if let Some(current) = highest_valid_claim {
                         if p_view > current.0 || (p_view == current.0 && p_seq > current.1) {
                             highest_valid_claim = Some((p_view, p_seq, p_digest));
@@ -865,7 +865,7 @@ mod adversarial_tests {
         
         let mut node1_state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
         
-        let seq = 10;
+        let seq: u64 = 10;
         let digest_a = [0xaa; 32];
         let digest_b = [0xbb; 32];
         
@@ -907,12 +907,12 @@ mod adversarial_tests {
                 let sig = sign_message(&canon, &secret_keys[&sender]);
                 PbftMessage { signature: sig, ..msg }
             };
-            let _ = node1_state.handle_message(&prep_msg);
+            assert!(node1_state.handle_message(&prep_msg).is_ok());
         }
 
         assert_eq!(node1_state.locked_digests.get(&seq), Some(&digest_a));
 
-        let target_view = 1;
+        let target_view: u64 = 1;
         for sender in 0..3 {
             let vc = ViewChangePayload {
                 target_view,
@@ -925,7 +925,7 @@ mod adversarial_tests {
             let canon = vc.canonical_bytes();
             let sig = sign_message(&canon, &secret_keys[&sender]);
             let signed_vc = ViewChangePayload { signature: sig, ..vc };
-            let _ = node1_state.handle_view_change_payload(&signed_vc);
+            assert!(node1_state.handle_view_change_payload(&signed_vc).is_ok());
         }
 
         assert_eq!(node1_state.current_view, 1);
