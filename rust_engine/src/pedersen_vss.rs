@@ -30,4 +30,3 @@ impl Default for PedersenCommitment {
         Self::new()
     }
 }
-
