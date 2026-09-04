@@ -1,119 +1,152 @@
 use std::collections::HashMap;
-use bls12_381::{G1Projective, G2Projective, G2Affine, Scalar};
+use bls12_381::{pairing, G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use ff::Field;
-use sha2::{Sha512, Digest};
 use group::Curve;
+use sha2::{Digest, Sha256, Sha512};
 
-pub fn hash_to_scalar(msg: &[u8], dst: &[u8]) -> Scalar {
+/// Produces an uncompressed scalar using SHA-512 wide reduction to eliminate modulo bias.
+pub fn hash_to_scalar(domain: &[u8], msg: &[u8]) -> Scalar {
     let mut hasher = Sha512::new();
-    hasher.update(dst);
+    hasher.update(domain);
     hasher.update(msg);
     let hash = hasher.finalize();
-    
+
     let mut wide_bytes = [0u8; 64];
-    wide_bytes.copy_from_slice(&hash[0..64]);
-    
+    wide_bytes.copy_from_slice(&hash);
     Scalar::from_bytes_wide(&wide_bytes)
 }
 
-pub fn lagrange_basis_at_zero(i: u32, participants: &[u32]) -> Scalar {
+/// Independent Nothing-Up-My-Sleeve (NUMS) G1 generator.
+pub fn get_nums_h_generator() -> G1Projective {
+    let scalar = hash_to_scalar(b"SOVEREIGN_LATTICE_NUMS_G1_SALT", b"GEN_NUMS_H_G1_DOMAIN_V1");
+    G1Projective::generator() * scalar
+}
+
+/// Independent Nothing-Up-My-Sleeve (NUMS) G2 generator for Pedersen VSS.
+pub fn independent_nums_g2_generator() -> G2Projective {
+    let scalar = hash_to_scalar(b"SOVEREIGN_LATTICE_NUMS_G2_SALT", b"GEN_NUMS_H_G2_DOMAIN_V1");
+    G2Projective::generator() * scalar
+}
+
+/// Secure domain-separated Hash-to-Curve mapping into G1.
+pub fn hash_to_curve(msg: &[u8]) -> G1Projective {
+    let scalar = hash_to_scalar(b"SOVEREIGN_LATTICE_BLS_G1_HASH", msg);
+    get_nums_h_generator() * scalar
+}
+
+/// Evaluates Lagrange basis coefficient at x = 0 across subset `indices`.
+/// Uses 1-based point evaluation (i + 1) so Node 0 does not zero out the numerator.
+pub fn lagrange_coefficient_at_zero(i: u32, indices: &[u32]) -> Scalar {
     let mut num = Scalar::one();
     let mut den = Scalar::one();
-    let x_i = Scalar::from(i as u64);
 
-    for &j in participants {
-        if j == i { continue; }
-        let x_j = Scalar::from(j as u64);
-        
-        num *= x_j;
-        
-        let mut diff = x_j;
-        diff -= x_i;
-        den *= diff;
+    let xi = Scalar::from((i + 1) as u64);
+
+    for &j in indices {
+        if j == i {
+            continue;
+        }
+        let xj = Scalar::from((j + 1) as u64);
+        num *= xj;
+        den *= xj - xi;
     }
-    
-    let den_inv = den.invert();
-    if bool::from(den_inv.is_some()) {
-        num * den_inv.unwrap()
-    } else {
-        Scalar::zero()
-    }
+
+    let den_inv = den.invert().unwrap_or(Scalar::zero());
+    num * den_inv
 }
 
+/// Reconstructs the threshold signature using Lagrange interpolation.
 pub fn reconstruct_threshold_signature(
     signatures: &HashMap<u32, G1Projective>,
-    _threshold: usize
+    threshold: usize,
 ) -> Result<G1Projective, &'static str> {
-    if signatures.len() < _threshold {
-        return Err("THRESHOLD_NOT_MET");
+    if signatures.len() < threshold {
+        return Err("INSUFFICIENT_SHARES_FOR_RECONSTRUCTION");
     }
 
-    let participants: Vec<u32> = signatures.keys().copied().take(_threshold).collect();
-    let mut master_sig = G1Projective::identity();
+    let indices: Vec<u32> = signatures.keys().copied().take(threshold).collect();
+    let mut combined_sig = G1Projective::identity();
 
-    for &i in &participants {
-        let sig_i = signatures.get(&i).unwrap();
-        let lambda_i = lagrange_basis_at_zero(i, &participants);
-        master_sig += sig_i * lambda_i;
+    for &idx in &indices {
+        let coeff = lagrange_coefficient_at_zero(idx, &indices);
+        combined_sig += signatures[&idx] * coeff;
     }
 
-    Ok(master_sig)
+    Ok(combined_sig)
 }
 
-pub fn independent_nums_g2_generator() -> G2Projective {
-    let mut counter = 0u32;
-    loop {
-        let mut hasher = Sha512::new();
-        hasher.update(b"SOVEREIGN_LATTICE_VSS_GENERATOR");
-        hasher.update(&counter.to_le_bytes());
-        let hash = hasher.finalize();
-        
-        let mut bytes = [0u8; 96];
-        bytes[0..64].copy_from_slice(&hash[0..64]);
-        bytes[0] |= 0xc0; 
-        
-        let affine_opt = G2Affine::from_compressed(&bytes);
-        if bool::from(affine_opt.is_some()) {
-            let affine = affine_opt.unwrap();
-            if bool::from(affine.is_on_curve()) && bool::from(affine.is_torsion_free()) {
-                return G2Projective::from(affine);
-            }
-        }
-        counter += 1;
+/// Reconstructs the aggregated public key for a specific participant set.
+pub fn reconstruct_threshold_public_key(
+    public_keys: &HashMap<u32, G2Projective>,
+    threshold: usize,
+) -> Result<G2Projective, &'static str> {
+    if public_keys.len() < threshold {
+        return Err("INSUFFICIENT_KEYS_FOR_RECONSTRUCTION");
     }
+
+    let indices: Vec<u32> = public_keys.keys().copied().take(threshold).collect();
+    let mut combined_pk = G2Projective::identity();
+
+    for &idx in &indices {
+        let coeff = lagrange_coefficient_at_zero(idx, &indices);
+        combined_pk += public_keys[&idx] * coeff;
+    }
+
+    Ok(combined_pk)
 }
 
-pub fn verify_threshold_signature(
-    msg: &[u8], 
-    dst: &[u8], 
-    signatures: &HashMap<u32, G1Projective>, 
-    master_public_key: &G2Projective,
-    _threshold: usize
+/// Basic bilinear pairing check: e(Sig, G2) == e(H(m), PK)
+pub fn verify_bls_signature(msg: &[u8], sig: &G1Projective, pk: &G2Projective) -> bool {
+    let h = hash_to_curve(msg);
+
+    let sig_affine = G1Affine::from(sig);
+    let g2_generator = G2Affine::generator();
+    let h_affine = G1Affine::from(&h);
+    let pk_affine = G2Affine::from(pk);
+
+    pairing(&sig_affine, &g2_generator) == pairing(&h_affine, &pk_affine)
+}
+
+/// Aggregates multiple G1 partial signatures additively.
+pub fn aggregate_signatures(signatures: &HashMap<u32, G1Projective>) -> G1Projective {
+    let mut agg = G1Projective::identity();
+    for sig in signatures.values() {
+        agg += sig;
+    }
+    agg
+}
+
+/// Aggregates multiple G2 public keys additively.
+pub fn aggregate_public_keys(public_keys: &HashMap<u32, G2Projective>) -> G2Projective {
+    let mut agg = G2Projective::identity();
+    for pk in public_keys.values() {
+        agg += pk;
+    }
+    agg
+}
+
+/// Verifies an aggregated signature against an aggregated public key.
+pub fn verify_aggregated_signature(
+    msg: &[u8],
+    agg_sig: &G1Projective,
+    agg_pk: &G2Projective,
 ) -> bool {
-    let master_sig = match reconstruct_threshold_signature(signatures, _threshold) {
-        Ok(sig) => sig,
-        Err(_) => return false,
-    };
-
-    let h_scalar = hash_to_scalar(msg, dst);
-    let h = G1Projective::generator() * h_scalar; 
-
-    let p1 = bls12_381::pairing(&master_sig.to_affine(), &G2Projective::generator().to_affine());
-    let p2 = bls12_381::pairing(&h.to_affine(), &master_public_key.to_affine());
-    
-    p1 == p2
+    verify_bls_signature(msg, agg_sig, agg_pk)
 }
 
-pub fn verify_bls_signature(
-    msg: &[u8], 
-    signature: &G1Projective, 
-    public_key: &G2Projective
+/// Verifies a threshold signature against a canonical master public key.
+pub fn verify_bound_threshold_signature(
+    msg: &[u8],
+    signatures: &HashMap<u32, G1Projective>,
+    master_pk: &G2Projective,
+    threshold: usize,
 ) -> bool {
-    let h_scalar = hash_to_scalar(msg, b"PBFT_BLS_SIG_V1_CSUITE");
-    let h = G1Projective::generator() * h_scalar; 
-    
-    let p1 = bls12_381::pairing(&signature.to_affine(), &G2Projective::generator().to_affine());
-    let p2 = bls12_381::pairing(&h.to_affine(), &public_key.to_affine());
-    
-    p1 == p2
+    if signatures.len() < threshold {
+        return false;
+    }
+
+    match reconstruct_threshold_signature(signatures, threshold) {
+        Ok(reconstructed_sig) => verify_bls_signature(msg, &reconstructed_sig, master_pk),
+        Err(_) => false,
+    }
 }
