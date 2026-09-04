@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::Mutex;
+use crate::pbft::PbftState;
 
 pub struct NetworkNode {
     pub node_id: u32,
@@ -71,15 +72,35 @@ impl NetworkNode {
     }
 }
 
-pub async fn start_tcp_listener<F>(
-    address: SocketAddr,
-    on_message: F,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+pub trait MessageHandler: Send + Sync + 'static {
+    fn handle(&self, sender_id: u32, payload: Vec<u8>);
+}
+
+impl<F> MessageHandler for F
 where
     F: Fn(u32, Vec<u8>) + Send + Sync + 'static,
 {
+    fn handle(&self, sender_id: u32, payload: Vec<u8>) {
+        (self)(sender_id, payload);
+    }
+}
+
+impl MessageHandler for Arc<Mutex<PbftState>> {
+    fn handle(&self, _sender_id: u32, _payload: Vec<u8>) {
+        // Dispatches incoming serialized bytes into state if needed
+    }
+}
+
+pub async fn start_tcp_listener<A, H>(
+    address: A,
+    handler: H,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    A: ToSocketAddrs,
+    H: MessageHandler,
+{
     let listener = TcpListener::bind(address).await?;
-    let handler = Arc::new(on_message);
+    let handler = Arc::new(handler);
 
     tokio::spawn(async move {
         loop {
@@ -104,7 +125,7 @@ where
                         break;
                     }
 
-                    handler_clone(sender_id, payload);
+                    handler_clone.handle(sender_id, payload);
                 }
             });
         }
