@@ -251,7 +251,7 @@ impl PbftState {
         let mut recovered_new_view_certificates = HashMap::new();
         let mut recovered_committed = HashMap::new();
 
-        let _ = wal.replay_log(|view, seq, phase_u8, sender_id, digest, signature| {
+        wal.replay_log(|view, seq, phase_u8, sender_id, digest, signature| {
             if view > recovered_view { recovered_view = view; }
             if seq > recovered_seq { recovered_seq = seq; }
             
@@ -263,12 +263,7 @@ impl PbftState {
                     let sigs = recovered_prepare_votes.entry((view, seq, digest)).or_default();
                     sigs.insert(sender_id, signature);
                     if sigs.len() >= quorum_size {
-                        let cert = PreparedCertificate {
-                            view,
-                            seq,
-                            digest,
-                            signatures: sigs.clone(),
-                        };
+                        let cert = PreparedCertificate { view, seq, digest, signatures: sigs.clone() };
                         if cert.verify(quorum_size, &initial_public_keys) {
                             recovered_certificates.insert((view, seq), cert);
                         }
@@ -278,12 +273,7 @@ impl PbftState {
                     let sigs = recovered_commit_votes.entry((view, seq, digest)).or_default();
                     sigs.insert(sender_id, signature);
                     if sigs.len() >= quorum_size {
-                        let commit_cert = CommitCertificate {
-                            view,
-                            seq,
-                            digest,
-                            signatures: sigs.clone(),
-                        };
+                        let commit_cert = CommitCertificate { view, seq, digest, signatures: sigs.clone() };
                         if commit_cert.verify(quorum_size, &initial_public_keys) {
                             recovered_commit_certificates.insert((view, seq), commit_cert);
                             recovered_committed.insert((view, seq), digest);
@@ -322,7 +312,7 @@ impl PbftState {
                 }
                 _ => {}
             }
-        });
+        }).map_err(|_| "WAL_CORRUPTION_FATAL: Log integrity compromised during replay. Halting to prevent Byzantine divergence.")?;
 
         Ok(Self {
             total_nodes,
@@ -380,14 +370,13 @@ impl PbftState {
                     return Err("LEADER_VIOLATION: PrePrepare message sent by a non-leader node!");
                 }
 
-                let last_committed_seq = self.commit_certificates.keys()
-                    .filter(|&(v, _)| *v == msg.view)
+                let last_globally_committed_seq = self.commit_certificates.keys()
                     .map(|&(_, s)| s)
                     .max()
                     .unwrap_or(0);
                     
-                if msg.seq > 0 && msg.seq <= last_committed_seq {
-                    return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to the last committed block!");
+                if msg.seq > 0 && msg.seq <= last_globally_committed_seq {
+                    return Err("SEQUENCE_VIOLATION: Proposed sequence is older than or equal to a GLOBALLY committed block!");
                 }
 
                 let has_equivocated = self.pre_prepared_proposals.iter()
@@ -494,6 +483,11 @@ impl PbftState {
                 }
 
                 let supporters = self.view_change_votes.entry(msg.view).or_default();
+                
+                if supporters.contains_key(&msg.sender_id) {
+                    return Err("DUPLICATE_VOTE_DETECTED: Node attempted to broadcast ViewChange twice for the same target view!");
+                }
+                
                 supporters.insert(msg.sender_id, (msg.seq, msg.digest, msg.signature));
 
                 if supporters.len() >= self.quorum_size {
@@ -568,6 +562,10 @@ mod adversarial_tests {
     use ff::Field;
     use sha2::{Sha256, Digest};
 
+    // TODO(CRYPTO-CORE): Implement strict RFC 9380 Hash-to-Curve using ExpandMsgXmd<sha2::Sha256>.
+    // Current implementation uses a scalar multiplication stub combined with SHA-256 for adversarial state-machine testing.
+    // DO NOT deploy to production without integrating the elliptic-curve::hash2curve traits.
+    
     fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
         let mut secret_keys = HashMap::new();
         let mut public_keys = HashMap::new();
