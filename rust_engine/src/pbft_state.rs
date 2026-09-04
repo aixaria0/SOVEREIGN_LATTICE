@@ -46,7 +46,15 @@ pub struct NewViewCertificate {
 }
 
 impl NewViewCertificate {
-    pub fn is_valid(&self, _f: usize) -> bool {
-        true
+    pub fn is_valid(&self, f: usize) -> bool {
+        let quorum_needed = 2 * f + 1;
+        if self.view_change_votes.len() < quorum_needed {
+            return false;
+        }
+
+        // All bundled votes must target the certificate's designated view
+        self.view_change_votes
+            .values()
+            .all(|vote| vote.view == self.target_view)
     }
 }
