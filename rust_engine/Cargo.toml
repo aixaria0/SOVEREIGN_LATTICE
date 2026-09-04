@@ -1,12 +1,15 @@
 [package]
-name = "sovereign_lattice_engine"
+name = "sovereign_lattice"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.0", features = ["full"] }
 bls12_381 = "0.8"
-ff = "0.13"
 group = "0.13"
-sha2 = "0.10"
+ff = "0.13"
 rand = "0.8"
+sha2 = "0.10"
+
+[dev-dependencies]
+proptest = "1.4"
