@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use bls12_381::{G1Projective, G2Projective, Scalar};
 use ff::Field;
 use rand::rngs::OsRng;
+use sha2::{Digest as ShaDigest, Sha256};
 use crate::pbft::{PbftMessage, PbftState, Phase};
 
 fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>) {
@@ -41,8 +42,12 @@ fn test_stateful_adversarial_simulation() {
     prep_msg_bytes.extend_from_slice(&seq.to_be_bytes());
     prep_msg_bytes.extend_from_slice(&digest);
 
-    // BLS signature: H(m) * sk
-    let h = G1Projective::hash_to_curve(&prep_msg_bytes, b"SOVEREIGN_LATTICE_CIP01", b"BLS_SIG");
+    let mut hasher = Sha256::new();
+    hasher.update(&prep_msg_bytes);
+    let hash_bytes: [u8; 32] = hasher.finalize().into();
+
+    let s = Scalar::from_bytes(&hash_bytes).unwrap_or(Scalar::one());
+    let h = G1Projective::generator() * s;
     let leader_sig = h * privkeys[&leader_id];
 
     let pre_prepare_msg = PbftMessage {
