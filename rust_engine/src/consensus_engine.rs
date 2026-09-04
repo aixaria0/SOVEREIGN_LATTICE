@@ -32,7 +32,7 @@ impl ConsensusEngine {
     /// Processes incoming messages strictly enforcing Lean 4 safety invariants
     pub fn process_message(&mut self, state: &mut NodeState, msg: PbftMessage) -> Result<(), &'static str> {
         match msg {
-            PbftMessage::PrePrepare { view, seq, digest } => {
+            PbftMessage::PrePrepare { .. } => {
                 // Signature and primary validation logic goes here
                 Ok(())
             }
