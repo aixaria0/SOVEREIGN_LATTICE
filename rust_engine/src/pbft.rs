@@ -760,3 +760,66 @@ impl PbftState {
         }
     }
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+    use bls12_381::{G1Projective, G2Projective, Scalar};
+    use rand::rngs::OsRng;
+    use ff::Field;
+
+    fn generate_test_keys(n: usize) -> (HashMap<u32, Scalar>, HashMap<u32, G2Projective>, G2Projective) {
+        let mut secret_keys = HashMap::new();
+        let mut public_keys = HashMap::new();
+        
+        let master_secret = Scalar::random(&mut OsRng);
+        let master_pk = G2Projective::generator() * master_secret;
+
+        for i in 0..n as u32 {
+            let sk = Scalar::random(&mut OsRng);
+            let pk = G2Projective::generator() * sk;
+            secret_keys.insert(i, sk);
+            public_keys.insert(i, pk);
+        }
+        (secret_keys, public_keys, master_pk)
+    }
+
+    fn sign_message(msg: &[u8], sk: &Scalar) -> G1Projective {
+        let h_scalar = crate::threshold_bls::hash_to_scalar(msg, b"PBFT_BLS_SIG_V1_CSUITE");
+        G1Projective::generator() * (h_scalar * sk)
+    }
+
+    #[test]
+    fn test_ghost_certificate_attack_rejected() {
+        let n = 4;
+        let (secret_keys, public_keys, master_pk) = generate_test_keys(n);
+        
+        let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Failed to init state");
+        
+        let target_view: u64 = 1;
+        let malicious_prep_view: u64 = 0;
+        let malicious_seq: u64 = 999; 
+        let malicious_digest = [0xbb; 32];
+
+        let create_view_change = |sender_id: u32, sk: &Scalar| {
+            let vc = ViewChangePayload {
+                target_view, prepared_view: malicious_prep_view, prepared_seq: malicious_seq,
+                digest: malicious_digest, sender_id, signature: G1Projective::identity(),
+            };
+            let canonical_msg = vc.canonical_bytes();
+            let sig = sign_message(&canonical_msg, sk);
+            ViewChangePayload { signature: sig, ..vc }
+        };
+
+        let vc1 = create_view_change(1, &secret_keys[&1]);
+        let vc2 = create_view_change(2, &secret_keys[&2]);
+        let vc3 = create_view_change(3, &secret_keys[&3]);
+
+        let _ = state.handle_view_change_payload(&vc1);
+        let _ = state.handle_view_change_payload(&vc2);
+        let _ = state.handle_view_change_payload(&vc3);
+
+        assert_eq!(state.highest_seq, 0);
+        assert_eq!(state.current_view, 0);
+    }
+}
