@@ -4,19 +4,19 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use crate::pbft::{PbftMessage, PbftState, Phase, ViewChangePayload};
 
-// نهایت سایز مجاز برای جلوگیری از حملات مموری (ViewChange حداکثر ۱۰۹ بایته)
+// Maximum allowed frame size to prevent memory exhaustion attacks (ViewChange is max at 109 bytes)
 pub const MAX_FRAME_SIZE: usize = 109;
 
 pub async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<PbftState>>) {
     loop {
         let mut len_buf = [0u8; 4];
         if stream.read_exact(&mut len_buf).await.is_err() {
-            break; // اتصال قطع شده یا خطای شبکه
+            break; // Connection closed or network error
         }
 
         let len = u32::from_be_bytes(len_buf) as usize;
 
-        // گارد امنیتی: دراپ کردن کانکشن‌هایی که پیام‌های بیش‌ازحد بزرگ یا غیرمجاز می‌فرستن
+        // SECURITY GUARD: Drop connections sending malicious oversized or undersized frames
         if len < 101 || len > MAX_FRAME_SIZE {
             eprintln!("SECURITY GUARD: Rejecting malicious frame size: {} bytes. Dropping connection.", len);
             break; 
@@ -35,7 +35,7 @@ pub async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<PbftState
 pub fn dispatch_network_payload(state: &mut PbftState, payload: &[u8]) {
     if payload.is_empty() { return; }
 
-    // مسیریاب: تشخیص نوع پیام بر اساس طول و بایت اول (فاز)
+    // Demultiplexer: Route to the correct parser based on length and Phase byte
     if payload.len() == 109 && payload[0] == Phase::ViewChange as u8 {
         match ViewChangePayload::from_bytes(payload) {
             Ok(vc) => {
