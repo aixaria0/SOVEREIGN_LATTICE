@@ -37,12 +37,12 @@ async fn main() -> std::io::Result<()> {
     let state = PbftState::new(4, public_keys).expect("Failed to initialize PBFT cluster");
     let state_clone = Arc::new(Mutex::new(state));
 
-    let _network = Arc::new(NetworkNode::new(node_id, bind_addr, peers.clone()));
+    let _network = Arc::new(NetworkNode::new(node_id, bind_addr, peers));
 
     println!("🟢 Starting SOVEREIGN_LATTICE Node {}", node_id);
     
-    // Pass strictly typed SocketAddr and HashMap to the listener
-    start_tcp_listener(bind_addr, state_clone, peers).await?;
+    // Synced perfectly to your green network.rs (2 arguments)
+    start_tcp_listener(bind_addr, state_clone).await?;
 
     Ok(())
 }
