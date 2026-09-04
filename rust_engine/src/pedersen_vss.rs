@@ -1,32 +1,24 @@
 use bls12_381::{G2Projective, Scalar};
-use rand::rngs::OsRng;
 use ff::Field;
-use crate::threshold_bls::independent_nums_g2_generator;
+use group::Curve;
 
-pub struct PedersenCommitment {
-    pub g: G2Projective,
-    pub h: G2Projective,
-}
+/// Verifies a participant's secret share against the publicly broadcasted Feldman commitments.
+/// If this check passes, the share is mathematically bound to the master public key (commitments[0]).
+pub fn verify_feldman_share(
+    participant_id: u32,
+    secret_share: &Scalar,
+    public_commitments: &[G2Projective]
+) -> bool {
+    let mut expected_pk = G2Projective::identity();
+    let x = Scalar::from(participant_id as u64);
+    let mut current_x_pow = Scalar::one();
 
-impl PedersenCommitment {
-    pub fn new() -> Self {
-        Self {
-            g: G2Projective::generator(),
-            h: independent_nums_g2_generator(),
-        }
+    // Evaluate the public commitment polynomial at x = participant_id
+    for commitment in public_commitments {
+        expected_pk += commitment * current_x_pow;
+        current_x_pow *= x;
     }
 
-    pub fn commit(&self, secret: &Scalar, blinding_factor: &Scalar) -> G2Projective {
-        (self.g * secret) + (self.h * blinding_factor)
-    }
-
-    pub fn generate_blinding_factor() -> Scalar {
-        Scalar::random(&mut OsRng)
-    }
-}
-
-impl Default for PedersenCommitment {
-    fn default() -> Self {
-        Self::new()
-    }
+    let actual_pk = G2Projective::generator() * secret_share;
+    actual_pk == expected_pk
 }
