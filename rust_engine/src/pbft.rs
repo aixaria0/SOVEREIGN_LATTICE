@@ -425,6 +425,30 @@ impl PbftState {
         if !self.registered_nodes.contains(&payload.sender_id) {
             return Err("UNAUTHORIZED_SENDER: View change sender not registered.");
         }
+
+        let pk = self
+            .public_keys
+            .get(&payload.sender_id)
+            .ok_or("CRYPTO_AUTH_FAILED: Public key not found for sender!")?;
+
+        if !check_sig(&payload.canonical_bytes(), &payload.signature, pk) {
+            return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
+        }
+
+        // STRICT INVARIANT: If the node claims it prepared a sequence, we must have the cryptographic evidence.
+        if payload.prepared_seq > 0 {
+            let has_valid_qc = self.prepared_certificates.values().any(|cert| {
+                cert.view == payload.prepared_view
+                    && cert.seq == payload.prepared_seq
+                    && cert.digest == payload.digest
+                    && cert.verify(self.quorum_size, &self.public_keys)
+            });
+
+            if !has_valid_qc {
+                return Err("CERTIFICATE_INVALID: ViewChange rejected; missing cryptographically verified Quorum Certificate locally!");
+            }
+        }
+
         Ok(())
     }
 
@@ -850,3 +874,4 @@ mod adversarial_tests {
         assert!(bound_cert.is_none() && max_quorum_seq > 0);
     }
 }
+
