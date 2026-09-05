@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use bls12_381::G2Projective;
 use sovereign_lattice::dkg::DkgSession;
 use sovereign_lattice::pbft::PbftState;
@@ -9,9 +12,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_id = 0u32;
     let total_nodes = 4usize;
     let threshold = 3usize;
-    let bind_addr = "127.0.0.1:8000";
+    let bind_addr_str = "127.0.0.1:8000";
+    let bind_addr: SocketAddr = bind_addr_str.parse()?;
 
-    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Production Node {} on {}...", node_id, bind_addr);
+    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Production Node {} on {}...", node_id, bind_addr_str);
 
     let mut dkg_session = DkgSession::new(node_id, threshold, total_nodes);
     let _my_commitments = dkg_session.generate_commitments();
@@ -52,10 +56,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
+    let shared_state = Arc::new(Mutex::new(pbft_state));
     println!("🛡️ [PBFT]: State machine locked! Validator registry uniquely populated.");
 
+    let mut peer_map = HashMap::new();
+    for id in 0..total_nodes as u32 {
+        let port = 8000 + id as u16;
+        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
+        peer_map.insert(id, addr);
+    }
+
     println!("🌐 [NETWORK]: Starting Tokio TCP transport daemon...");
-    start_tcp_listener(bind_addr, pbft_state).await?;
+    start_tcp_listener(bind_addr, shared_state, peer_map).await?;
 
     Ok(())
 }
