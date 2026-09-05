@@ -1,39 +1,71 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
+use std::env;
 use bls12_381::G2Projective;
 use sovereign_lattice::dkg::DkgSession;
-use sovereign_lattice::pbft::PbftState;
-use sovereign_lattice::network::start_tcp_listener;
+use sovereign_lattice::pbft::{PbftMessage, PbftState};
+use sovereign_lattice::network::{spawn_outbound_broadcaster, start_tcp_listener};
+
+#[derive(Clone, Debug)]
+pub struct NodeConfig {
+    pub node_id: u32,
+    pub total_nodes: usize,
+    pub threshold: usize,
+    pub bind_addr: SocketAddr,
+    pub peer_map: HashMap<u32, SocketAddr>,
+}
+
+impl NodeConfig {
+    pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        let node_id: u32 = env::var("NODE_ID").unwrap_or_else(|_| "0".into()).parse()?;
+        let total_nodes: usize = env::var("TOTAL_NODES").unwrap_or_else(|_| "4".into()).parse()?;
+        let threshold: usize = env::var("THRESHOLD").unwrap_or_else(|_| "3".into()).parse()?;
+        
+        let bind_addr_str = env::var("BIND_ADDR").unwrap_or_else(|_| format!("127.0.0.1:{}", 8000 + node_id));
+        let bind_addr: SocketAddr = bind_addr_str.parse()?;
+
+        let mut peer_map = HashMap::new();
+        for id in 0..total_nodes as u32 {
+            let port = 8000 + id as u16;
+            let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
+            peer_map.insert(id, addr);
+        }
+
+        Ok(Self {
+            node_id,
+            total_nodes,
+            threshold,
+            bind_addr,
+            peer_map,
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let node_id = 0u32;
-    let total_nodes = 4usize;
-    let threshold = 3usize;
-    let bind_addr_str = "127.0.0.1:8000";
-    let bind_addr: SocketAddr = bind_addr_str.parse()?;
+    let config = NodeConfig::from_env()?;
 
-    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Production Node {} on {}...", node_id, bind_addr_str);
+    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Production Node {} on {}...", config.node_id, config.bind_addr);
 
-    let mut dkg_session = DkgSession::new(node_id, threshold, total_nodes);
+    let mut dkg_session = DkgSession::new(config.node_id, config.threshold, config.total_nodes);
     let _my_commitments = dkg_session.generate_commitments();
     println!("📦 [DKG]: Generated local Feldman polynomial commitments.");
 
-    let expected_participants: Vec<u32> = (0..total_nodes as u32).collect();
+    let expected_participants: Vec<u32> = (0..config.total_nodes as u32).collect();
     
     let mut peer_sessions = HashMap::new();
     for &id in &expected_participants {
-        if id != node_id {
-            let peer_session = DkgSession::new(id, threshold, total_nodes);
+        if id != config.node_id {
+            let peer_session = DkgSession::new(id, config.threshold, config.total_nodes);
             peer_sessions.insert(id, peer_session);
         }
     }
 
     for (&peer_id, peer_session) in &peer_sessions {
         let peer_commitments = peer_session.generate_commitments();
-        let share_for_us = peer_session.evaluate_share_for(node_id);
+        let share_for_us = peer_session.evaluate_share_for(config.node_id);
         dkg_session.process_incoming_share(peer_id, share_for_us, &peer_commitments)?;
     }
 
@@ -42,8 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut public_keys = HashMap::new();
     for &id in &expected_participants {
-        if id == node_id {
-            public_keys.insert(id, G2Projective::generator() * my_secret_share);
+        if id == config.node_id {
+            let my_signing_pk = G2Projective::generator() * my_secret_share;
+            public_keys.insert(id, my_signing_pk);
         } else {
             let mut peer_true_secret_share = dkg_session.evaluate_share_for(id);
             for peer_session in peer_sessions.values() {
@@ -55,19 +88,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
+    let pbft_state = PbftState::new(config.total_nodes, public_keys, canonical_master_pk)?;
     let shared_state = Arc::new(Mutex::new(pbft_state));
     println!("🛡️ [PBFT]: State machine locked! Validator registry uniquely populated.");
 
-    let mut peer_map = HashMap::new();
-    for id in 0..total_nodes as u32 {
-        let port = 8000 + id as u16;
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-        peer_map.insert(id, addr);
-    }
+    let (tx, rx) = mpsc::channel::<PbftMessage>(256);
 
-    println!("🌐 [NETWORK]: Starting Tokio TCP transport daemon...");
-    start_tcp_listener(bind_addr, shared_state, peer_map).await?;
+    let broadcaster_handle = spawn_outbound_broadcaster(config.node_id, config.peer_map.clone(), rx);
+    println!("📡 [BROADCASTER]: Asynchronous outbound broadcast worker started.");
 
+    println!("🌐 [NETWORK]: Starting Tokio TCP transport listener daemon...");
+    let listener_handle = tokio::spawn(async move {
+        if let Err(e) = start_tcp_listener(config.bind_addr, shared_state, config.peer_map).await {
+            eprintln!("FATAL_LISTENER_ERROR: {}", e);
+        }
+    });
+
+    let _ = tokio::join!(broadcaster_handle, listener_handle);
+
+    drop(tx);
     Ok(())
 }
