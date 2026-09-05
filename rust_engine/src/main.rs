@@ -97,9 +97,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let broadcaster_handle = spawn_outbound_broadcaster(config.node_id, config.peer_map.clone(), rx);
     println!("📡 [BROADCASTER]: Asynchronous outbound broadcast worker started.");
 
+    let listener_node_id = config.node_id;
+    let listener_bind_addr = config.bind_addr;
+    let listener_peer_map = config.peer_map;
+    let listener_tx = tx.clone();
+
     println!("🌐 [NETWORK]: Starting Tokio TCP transport listener daemon...");
     let listener_handle = tokio::spawn(async move {
-        if let Err(e) = start_tcp_listener(config.bind_addr, shared_state, config.peer_map).await {
+        if let Err(e) = start_tcp_listener(
+            listener_bind_addr,
+            listener_node_id,
+            my_secret_share,
+            shared_state,
+            listener_peer_map,
+            listener_tx,
+        ).await {
             eprintln!("FATAL_LISTENER_ERROR: {}", e);
         }
     });
