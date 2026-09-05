@@ -24,6 +24,7 @@ fn main() -> Result<(), &'static str> {
         }
     }
 
+    // Exchange shares with Node 0
     for (&peer_id, peer_session) in &peer_sessions {
         let peer_commitments = peer_session.generate_commitments();
         let share_for_us = peer_session.evaluate_share_for(node_id);
@@ -33,16 +34,27 @@ fn main() -> Result<(), &'static str> {
     let (my_secret_share, canonical_master_pk) = dkg_session.finalize_dkg(&expected_participants)?;
     println!("🔑 [DKG SUCCESS]: Master public key successfully synthesized and verified.");
 
+    // Build the true, cryptographically unique public keys for each individual node
     let mut public_keys = HashMap::new();
     for &id in &expected_participants {
-        let node_signing_pk = G2Projective::generator() * my_secret_share;
-        public_keys.insert(id, node_signing_pk);
+        if id == node_id {
+            // Insert our own verified local share
+            public_keys.insert(id, G2Projective::generator() * my_secret_share);
+        } else {
+            // Calculate the true share of other nodes using polynomial evaluation
+            let mut peer_true_secret_share = dkg_session.evaluate_share_for(id);
+            for peer_session in peer_sessions.values() {
+                peer_true_secret_share += peer_session.evaluate_share_for(id);
+            }
+            
+            let node_signing_pk = G2Projective::generator() * peer_true_secret_share;
+            public_keys.insert(id, node_signing_pk);
+        }
     }
-    public_keys.insert(node_id, G2Projective::generator() * my_secret_share);
 
     let _pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
 
-    println!("🛡️ [PBFT]: State machine successfully locked with DKG master key.");
+    println!("🛡️ [PBFT]: State machine locked! Validator registry uniquely populated.");
 
     Ok(())
 }
