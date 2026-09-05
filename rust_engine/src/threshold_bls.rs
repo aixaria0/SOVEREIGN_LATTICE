@@ -1,9 +1,57 @@
 use bls12_381::{pairing, G1Projective, G2Projective, Scalar};
+use ff::Field;
 use group::Curve;
 use sha2::{Digest, Sha256};
 
-pub fn hash_to_scalar(data: &[u8]) -> Scalar {
+pub fn evaluation_point(index: usize) -> Scalar {
+    Scalar::from((index + 1) as u64)
+}
+
+pub fn lagrange_coefficient_at_zero(i: usize, indices: &[usize]) -> Scalar {
+    let xi = evaluation_point(i);
+    let mut num = Scalar::one();
+    let mut den = Scalar::one();
+
+    for &j in indices {
+        if i == j {
+            continue;
+        }
+        let xj = evaluation_point(j);
+        num *= xj;
+        den *= xj - xi;
+    }
+
+    let den_inv = den.invert();
+    if bool::from(den_inv.is_some()) {
+        num * den_inv.unwrap()
+    } else {
+        Scalar::zero()
+    }
+}
+
+pub fn reconstruct_threshold_signature(
+    shares: &[(usize, G1Projective)],
+    indices: &[usize],
+) -> G1Projective {
+    let mut reconstructed = G1Projective::identity();
+    for &(idx, share) in shares {
+        let coeff = lagrange_coefficient_at_zero(idx, indices);
+        reconstructed += share * coeff;
+    }
+    reconstructed
+}
+
+pub fn verify_bound_threshold_signature(
+    msg: &[u8],
+    reconstructed_sig: &G1Projective,
+    master_pk: &G2Projective,
+) -> bool {
+    verify_bls_signature(msg, reconstructed_sig, master_pk)
+}
+
+pub fn hash_to_scalar(domain: &[u8], data: &[u8]) -> Scalar {
     let mut hasher = Sha256::new();
+    hasher.update(domain);
     hasher.update(data);
     let result = hasher.finalize();
 
@@ -15,7 +63,7 @@ pub fn hash_to_scalar(data: &[u8]) -> Scalar {
 }
 
 pub fn hash_to_curve(msg: &[u8]) -> G1Projective {
-    let scalar = hash_to_scalar(msg);
+    let scalar = hash_to_scalar(b"SOVEREIGN_LATTICE_BLS_CURVE_HASH", msg);
     G1Projective::generator() * scalar
 }
 
@@ -50,7 +98,6 @@ pub fn aggregate_public_keys(pks: &[G2Projective]) -> G2Projective {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ff::Field;
     use rand::rngs::OsRng;
 
     #[test]
