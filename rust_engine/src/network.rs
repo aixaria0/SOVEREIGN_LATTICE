@@ -214,3 +214,44 @@ async fn handle_connection(
 
     Err("UNKNOWN_PAYLOAD_TYPE".into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bls12_381::G2Projective;
+    use ff::Field;
+    use rand::rngs::OsRng;
+
+    #[tokio::test]
+    async fn test_broadcast_and_listener_handshake() {
+        let port = 9055u16;
+        let bind_addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+
+        let sk = Scalar::random(&mut OsRng);
+        let pk = G2Projective::generator() * sk;
+
+        let mut public_keys = HashMap::new();
+        public_keys.insert(0, pk);
+
+        let state = Arc::new(Mutex::new(
+            PbftState::new(1, public_keys, pk).expect("State init failed"),
+        ));
+
+        let mut peer_map = HashMap::new();
+        peer_map.insert(0, bind_addr);
+
+        let (tx, rx) = mpsc::channel(16);
+        let _broadcaster = spawn_outbound_broadcaster(0, peer_map.clone(), rx);
+
+        let listener_state = Arc::clone(&state);
+        let listener_tx = tx.clone();
+        tokio::spawn(async move {
+            let _ = start_tcp_listener(bind_addr, 0, sk, listener_state, peer_map, listener_tx).await;
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let stream = TcpStream::connect(bind_addr).await;
+        assert!(stream.is_ok(), "TCP handshake with listener failed");
+    }
+}
