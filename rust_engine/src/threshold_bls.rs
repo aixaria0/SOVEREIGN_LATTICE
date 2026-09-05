@@ -2,10 +2,21 @@ use bls12_381::{pairing, G1Projective, G2Projective, Scalar};
 use group::Curve;
 use sha2::{Digest, Sha256};
 
-pub const BLS_SIG_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
+pub fn hash_to_scalar(data: &[u8]) -> Scalar {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+
+    let mut buf = [0u8; 64];
+    buf[..32].copy_from_slice(&result);
+    buf[32..].copy_from_slice(&result);
+
+    Scalar::from_bytes_wide(&buf)
+}
 
 pub fn hash_to_curve(msg: &[u8]) -> G1Projective {
-    G1Projective::hash_to_curve(msg, BLS_SIG_DST, &[])
+    let scalar = hash_to_scalar(msg);
+    G1Projective::generator() * scalar
 }
 
 pub fn sign_bls_message(msg: &[u8], sk: &Scalar) -> G1Projective {
@@ -34,18 +45,6 @@ pub fn aggregate_public_keys(pks: &[G2Projective]) -> G2Projective {
         sum += p;
     }
     sum
-}
-
-pub fn hash_to_scalar(data: &[u8]) -> Scalar {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-
-    let mut buf = [0u8; 64];
-    buf[..32].copy_from_slice(&result);
-    buf[32..].copy_from_slice(&result);
-
-    Scalar::from_bytes_wide(&buf)
 }
 
 #[cfg(test)]
