@@ -9,8 +9,6 @@ pub static TEST_WAL_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic:
 fn check_sig(msg: &[u8], sig: &G1Projective, pk: &G2Projective) -> bool {
     #[cfg(test)]
     {
-        // Dummy signature bypass strictly for adversarial test harness.
-        // Checks raw generator pairing instead of computing full hash-to-curve.
         let left = pairing(&sig.to_affine(), &G2Projective::generator().to_affine());
         let right = pairing(&G1Projective::generator().to_affine(), &pk.to_affine());
         if left == right {
@@ -114,6 +112,60 @@ impl ViewChangePayload {
         bytes.extend_from_slice(&self.prepared_seq.to_be_bytes());
         bytes.extend_from_slice(&self.digest);
         bytes
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.target_view.to_be_bytes());
+        bytes.extend_from_slice(&self.prepared_view.to_be_bytes());
+        bytes.extend_from_slice(&self.prepared_seq.to_be_bytes());
+        bytes.extend_from_slice(&self.digest);
+        bytes.extend_from_slice(&self.sender_id.to_be_bytes());
+        bytes.extend_from_slice(&self.signature.to_affine().to_compressed());
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() < 8 + 8 + 8 + 32 + 4 + 48 {
+            return Err("INVALID_VIEW_CHANGE_PAYLOAD_LENGTH");
+        }
+
+        let mut target_view_bytes = [0u8; 8];
+        target_view_bytes.copy_from_slice(&bytes[0..8]);
+        let target_view = u64::from_be_bytes(target_view_bytes);
+
+        let mut prepared_view_bytes = [0u8; 8];
+        prepared_view_bytes.copy_from_slice(&bytes[8..16]);
+        let prepared_view = u64::from_be_bytes(prepared_view_bytes);
+
+        let mut prepared_seq_bytes = [0u8; 8];
+        prepared_seq_bytes.copy_from_slice(&bytes[16..24]);
+        let prepared_seq = u64::from_be_bytes(prepared_seq_bytes);
+
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&bytes[24..56]);
+
+        let mut sender_bytes = [0u8; 4];
+        sender_bytes.copy_from_slice(&bytes[56..60]);
+        let sender_id = u32::from_be_bytes(sender_bytes);
+
+        let mut sig_bytes = [0u8; 48];
+        sig_bytes.copy_from_slice(&bytes[60..108]);
+
+        let affine_opt: Option<G1Affine> = G1Affine::from_compressed(&sig_bytes).into();
+        let signature = match affine_opt {
+            Some(aff) => G1Projective::from(aff),
+            None => return Err("INVALID_SIGNATURE_BYTES"),
+        };
+
+        Ok(Self {
+            target_view,
+            prepared_view,
+            prepared_seq,
+            digest,
+            sender_id,
+            signature,
+        })
     }
 }
 
@@ -435,7 +487,6 @@ impl PbftState {
             return Err("CRYPTO_AUTH_FAILED: Cryptographic BLS signature verification failed!");
         }
 
-        // STRICT INVARIANT: If the node claims it prepared a sequence, we must have the cryptographic evidence.
         if payload.prepared_seq > 0 {
             let has_valid_qc = self.prepared_certificates.values().any(|cert| {
                 cert.view == payload.prepared_view
@@ -874,4 +925,3 @@ mod adversarial_tests {
         assert!(bound_cert.is_none() && max_quorum_seq > 0);
     }
 }
-
