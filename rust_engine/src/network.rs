@@ -1,117 +1,145 @@
+use crate::pbft::{PbftMessage, PbftState, ViewChangePayload};
+use crate::threshold_bls::verify_bls_signature;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Semaphore};
-use crate::pbft::{PbftMessage, PbftState, Phase, ViewChangePayload};
 
-pub const MAX_FRAME_SIZE: usize = 109;
-pub const MAX_CONCURRENT_CONNECTIONS: usize = 100;
+const MAX_CONNECTIONS: usize = 128;
+const MAX_PACKET_SIZE: usize = 4096;
 
-pub struct NetworkNode {
-    pub node_id: u32,
-    pub bind_addr: SocketAddr,
-    pub peers: HashMap<u32, SocketAddr>,
-}
+pub async fn broadcast_message(
+    peers: &HashMap<u32, SocketAddr>,
+    self_id: u32,
+    payload: &[u8],
+) -> Vec<(u32, Result<(), String>)> {
+    let mut results = Vec::new();
 
-impl NetworkNode {
-    pub fn new(node_id: u32, bind_addr: SocketAddr, peers: HashMap<u32, SocketAddr>) -> Self {
-        Self {
-            node_id,
-            bind_addr,
-            peers,
+    for (&peer_id, &addr) in peers {
+        if peer_id == self_id {
+            continue;
+        }
+
+        let payload_vec = payload.to_vec();
+        match TcpStream::connect(addr).await {
+            Ok(mut stream) => {
+                let len_bytes = (payload_vec.len() as u32).to_be_bytes();
+                if let Err(e) = stream.write_all(&len_bytes).await {
+                    results.push((peer_id, Err(format!("SEND_LEN_FAILED: {}", e))));
+                    continue;
+                }
+                if let Err(e) = stream.write_all(&payload_vec).await {
+                    results.push((peer_id, Err(format!("SEND_PAYLOAD_FAILED: {}", e))));
+                    continue;
+                }
+                results.push((peer_id, Ok(())));
+            }
+            Err(e) => {
+                results.push((peer_id, Err(format!("CONNECT_FAILED: {}", e))));
+            }
         }
     }
+
+    results
 }
 
 pub async fn start_tcp_listener(
-    bind_addr: SocketAddr, 
-    state: Arc<Mutex<PbftState>>, 
-    allowed_peers: HashMap<u32, SocketAddr>
-) -> std::io::Result<()> {
+    bind_addr: SocketAddr,
+    state: Arc<Mutex<PbftState>>,
+    peer_map: HashMap<u32, SocketAddr>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(bind_addr).await?;
-    println!("🚀 TCP Listener started on {}", bind_addr);
-    
-    let connection_limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
-    
-    let allowed_ips: Arc<HashSet<std::net::IpAddr>> = Arc::new(
-        allowed_peers.values().map(|addr| addr.ip()).collect()
-    );
+    let connection_semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
+    let allowed_ips: HashSet<_> = peer_map.values().map(|addr| addr.ip()).collect();
 
     loop {
-        match listener.accept().await {
-            Ok((stream, addr)) => {
-                if !allowed_ips.contains(&addr.ip()) {
-                    eprintln!("🛡️ SECURITY GUARD: Dropped unauthorized connection from {}", addr.ip());
-                    continue;
-                }
+        let (socket, peer_addr) = listener.accept().await?;
 
-                let permit = match connection_limiter.clone().acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => {
-                        eprintln!("🛡️ SECURITY GUARD: Max connections reached. Dropping {}", addr);
-                        continue;
-                    }
-                };
-
-                let state_clone = Arc::clone(&state);
-                tokio::spawn(async move {
-                    handle_connection(stream, state_clone).await;
-                    drop(permit);
-                });
-            }
-            Err(e) => eprintln!("Network accept error: {}", e),
+        if !allowed_ips.contains(&peer_addr.ip()) {
+            eprintln!("REJECTED_UNAUTHORIZED_IP: {}", peer_addr);
+            continue;
         }
+
+        let permit = match connection_semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("DROP_OVERLOAD: Semaphore capacity reached on {}", bind_addr);
+                continue;
+            }
+        };
+
+        let shared_state = Arc::clone(&state);
+
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Err(err) = handle_connection(socket, shared_state).await {
+                eprintln!("CONNECTION_PROCESSING_ERROR: {}", err);
+            }
+        });
     }
 }
 
-pub async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<PbftState>>) {
-    loop {
-        let mut len_buf = [0u8; 4];
-        if stream.read_exact(&mut len_buf).await.is_err() {
-            break; 
-        }
+async fn handle_connection(
+    mut socket: TcpStream,
+    state: Arc<Mutex<PbftState>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut len_bytes = [0u8; 4];
+    socket.read_exact(&mut len_bytes).await?;
+    let length = u32::from_be_bytes(len_bytes) as usize;
 
-        let len = u32::from_be_bytes(len_buf) as usize;
+    if length > MAX_PACKET_SIZE || length == 0 {
+        return Err("INVALID_PACKET_SIZE".into());
+    }
 
-        if len < 101 || len > MAX_FRAME_SIZE {
-            eprintln!("🛡️ SECURITY GUARD: Rejecting malicious frame size: {} bytes.", len);
-            break; 
-        }
+    let mut payload = vec![0u8; length];
+    socket.read_exact(&mut payload).await?;
 
-        let mut payload = vec![0u8; len];
-        if stream.read_exact(&mut payload).await.is_err() {
-            break;
+    let public_keys = {
+        let guard = state.lock().await;
+        guard.public_keys.clone()
+    };
+
+    if let Ok(msg) = PbftMessage::from_bytes(&payload) {
+        let pk = public_keys
+            .get(&msg.sender_id)
+            .ok_or("CRYPTO_AUTH_FAILED: Sender not registered")?;
+
+        let mut canonical_msg = Vec::new();
+        canonical_msg.push(msg.phase as u8);
+        canonical_msg.extend_from_slice(&msg.view.to_be_bytes());
+        canonical_msg.extend_from_slice(&msg.seq.to_be_bytes());
+        canonical_msg.extend_from_slice(&msg.digest);
+
+        if !verify_bls_signature(&canonical_msg, &msg.signature, pk) {
+            return Err("CRYPTO_AUTH_FAILED: Invalid signature rejected before state lock".into());
         }
 
         let mut locked_state = state.lock().await;
-        dispatch_network_payload(&mut locked_state, &payload);
+        let response = locked_state.handle_message(&msg)?;
+        println!("{}", response);
+        return Ok(());
     }
-}
 
-pub fn dispatch_network_payload(state: &mut PbftState, payload: &[u8]) {
-    if payload.is_empty() { return; }
+    if let Ok(payload_vc) = ViewChangePayload::from_bytes(&payload) {
+        let pk = public_keys
+            .get(&payload_vc.sender_id)
+            .ok_or("CRYPTO_AUTH_FAILED: Sender not registered")?;
 
-    if payload.len() == 109 && payload[0] == Phase::ViewChange as u8 {
-        match ViewChangePayload::from_bytes(payload) {
-            Ok(vc) => {
-                if let Err(e) = state.handle_view_change_payload(&vc) {
-                    eprintln!("⚠️ ViewChange Rejected: {}", e);
-                }
-            }
-            Err(e) => eprintln!("❌ ViewChange Parse Error: {}", e),
+        if !verify_bls_signature(&payload_vc.canonical_bytes(), &payload_vc.signature, pk) {
+            return Err("CRYPTO_AUTH_FAILED: Invalid signature rejected before state lock".into());
         }
-    } else if payload.len() == 101 {
-        match PbftMessage::from_bytes(payload) {
-            Ok(msg) => {
-                if let Err(e) = state.handle_message(&msg) {
-                    eprintln!("⚠️ PBFT Message Rejected: {}", e);
-                }
-            }
-            Err(e) => eprintln!("❌ PBFT Parse Error: {}", e),
-        }
-    } else {
-        eprintln!("🛡️ SECURITY GUARD: Unrecognized frame format.");
+
+        let mut locked_state = state.lock().await;
+        locked_state.handle_view_change_payload(&payload_vc)?;
+        println!(
+            "📥 [VIEW_CHANGE_AUTHENTICATED]: Processed ViewChange payload from node {}",
+            payload_vc.sender_id
+        );
+        return Ok(());
     }
+
+    Err("UNKNOWN_PAYLOAD_TYPE".into())
 }
