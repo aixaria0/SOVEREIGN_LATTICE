@@ -1,7 +1,10 @@
 use crate::threshold_bls::verify_bls_signature;
 use crate::wal::WriteAheadLog;
-use bls12_381::{G1Projective, G2Projective};
+use bls12_381::{G1Affine, G1Projective, G2Projective};
+use group::Curve;
 use std::collections::{HashMap, HashSet};
+
+pub static TEST_WAL_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -21,7 +24,74 @@ pub struct PbftMessage {
     pub signature: G1Projective,
 }
 
-#[derive(Clone)]
+impl PbftMessage {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(self.phase as u8);
+        bytes.extend_from_slice(&self.view.to_be_bytes());
+        bytes.extend_from_slice(&self.seq.to_be_bytes());
+        bytes.extend_from_slice(&self.digest);
+        bytes.extend_from_slice(&self.sender_id.to_be_bytes());
+        bytes.extend_from_slice(&self.signature.to_affine().to_compressed());
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() < 1 + 8 + 8 + 32 + 4 + 48 {
+            return Err("INVALID_MESSAGE_LENGTH");
+        }
+        let phase = match bytes[0] {
+            0 => Phase::PrePrepare,
+            1 => Phase::Prepare,
+            2 => Phase::Commit,
+            3 => Phase::ViewChange,
+            _ => return Err("INVALID_PHASE"),
+        };
+        let mut view_bytes = [0u8; 8];
+        view_bytes.copy_from_slice(&bytes[1..9]);
+        let view = u64::from_be_bytes(view_bytes);
+
+        let mut seq_bytes = [0u8; 8];
+        seq_bytes.copy_from_slice(&bytes[9..17]);
+        let seq = u64::from_be_bytes(seq_bytes);
+
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&bytes[17..49]);
+
+        let mut sender_bytes = [0u8; 4];
+        sender_bytes.copy_from_slice(&bytes[49..53]);
+        let sender_id = u32::from_be_bytes(sender_bytes);
+
+        let mut sig_bytes = [0u8; 48];
+        sig_bytes.copy_from_slice(&bytes[53..101]);
+
+        let affine_opt: Option<G1Affine> = G1Affine::from_compressed(&sig_bytes).into();
+        let signature = match affine_opt {
+            Some(aff) => G1Projective::from(aff),
+            None => return Err("INVALID_SIGNATURE_BYTES"),
+        };
+
+        Ok(Self {
+            phase,
+            view,
+            seq,
+            digest,
+            sender_id,
+            signature,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ViewChangePayload {
+    pub view: u64,
+    pub last_seq: u64,
+    pub prepared_certificates: Vec<PreparedCertificate>,
+    pub sender_id: u32,
+    pub signature: G1Projective,
+}
+
+#[derive(Clone, Debug)]
 pub struct PreparedCertificate {
     pub view: u64,
     pub seq: u64,
@@ -54,7 +124,7 @@ impl PreparedCertificate {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommitCertificate {
     pub view: u64,
     pub seq: u64,
@@ -164,6 +234,7 @@ pub struct PbftState {
     pub quorum_size: usize,
     registered_nodes: HashSet<u32>,
     pub public_keys: HashMap<u32, G2Projective>,
+    pub master_public_key: G2Projective,
     wal: WriteAheadLog,
 }
 
@@ -171,6 +242,7 @@ impl PbftState {
     pub fn new(
         total_nodes: usize,
         initial_public_keys: HashMap<u32, G2Projective>,
+        master_public_key: G2Projective,
     ) -> Result<Self, &'static str> {
         let f = (total_nodes - 1) / 3;
         if total_nodes != 3 * f + 1 {
@@ -186,7 +258,14 @@ impl PbftState {
             }
         }
 
-        let mut wal = WriteAheadLog::open("consensus_wal.log")
+        let wal_path = if cfg!(test) {
+            let count = TEST_WAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            format!("consensus_wal_test_{}_{:?}.log", count, std::thread::current().id())
+        } else {
+            format!("consensus_wal.log")
+        };
+
+        let mut wal = WriteAheadLog::open(&wal_path)
             .map_err(|_| "WAL_ERROR: Failed to initialize Write-Ahead Log storage file!")?;
 
         let mut recovered_view = 0;
@@ -310,12 +389,20 @@ impl PbftState {
             quorum_size,
             registered_nodes,
             public_keys: initial_public_keys,
+            master_public_key,
             wal,
         })
     }
 
     pub fn get_expected_leader(&self, view: u64) -> u32 {
         (view % self.total_nodes as u64) as u32
+    }
+
+    pub fn handle_view_change_payload(&mut self, payload: &ViewChangePayload) -> Result<(), &'static str> {
+        if !self.registered_nodes.contains(&payload.sender_id) {
+            return Err("UNAUTHORIZED_SENDER: View change sender not registered.");
+        }
+        Ok(())
     }
 
     pub fn handle_message(&mut self, msg: &PbftMessage) -> Result<String, &'static str> {
@@ -580,8 +667,9 @@ mod adversarial_tests {
     fn test_conflicting_preprepare_rejected() {
         let n = 4; // 3f + 1, where f = 1
         let (secret_keys, public_keys) = generate_test_keys(n);
+        let master_pk = G2Projective::generator();
 
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+        let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Failed to init state");
 
         let view = state.current_view;
         let leader_id = state.get_expected_leader(view);
@@ -640,8 +728,9 @@ mod adversarial_tests {
     fn test_cross_view_commit_certificate_rejected() {
         let n = 4; // 3f + 1, where f = 1
         let (secret_keys, public_keys) = generate_test_keys(n);
+        let master_pk = G2Projective::generator();
 
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+        let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Failed to init state");
 
         let prepared_view: u64 = 0;
         let commit_view: u64 = 1;
@@ -712,10 +801,10 @@ mod adversarial_tests {
     fn test_ghost_certificate_attack_rejected() {
         let n = 4; // 3f + 1, where f = 1
         let (secret_keys, public_keys) = generate_test_keys(n);
+        let master_pk = G2Projective::generator();
 
-        let mut state = PbftState::new(n, public_keys.clone()).expect("Failed to init state");
+        let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Failed to init state");
 
-        // Fix: Explicitly define types as u64 to prevent compiler ambiguity
         let target_view: u64 = 1;
         let malicious_seq: u64 = 999; // Ghost sequence
         let malicious_digest = [0xbb; 32];
@@ -775,4 +864,3 @@ mod adversarial_tests {
         assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
     }
 }
-
