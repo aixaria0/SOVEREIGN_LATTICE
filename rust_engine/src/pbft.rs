@@ -84,11 +84,23 @@ impl PbftMessage {
 
 #[derive(Clone, Debug)]
 pub struct ViewChangePayload {
-    pub view: u64,
-    pub last_seq: u64,
-    pub prepared_certificates: Vec<PreparedCertificate>,
+    pub target_view: u64,
+    pub prepared_view: u64,
+    pub prepared_seq: u64,
+    pub digest: [u8; 32],
     pub sender_id: u32,
     pub signature: G1Projective,
+}
+
+impl ViewChangePayload {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.target_view.to_be_bytes());
+        bytes.extend_from_slice(&self.prepared_view.to_be_bytes());
+        bytes.extend_from_slice(&self.prepared_seq.to_be_bytes());
+        bytes.extend_from_slice(&self.digest);
+        bytes
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -157,7 +169,6 @@ impl CommitCertificate {
     }
 }
 
-/// Fully Cryptographically Bound NewView Certificate with Quorum-Sourced Evidence
 #[derive(Clone)]
 pub struct NewViewCertificate {
     pub target_view: u64,
@@ -184,7 +195,6 @@ impl NewViewCertificate {
             .map(|&(_, d, _)| d)
             .unwrap_or([0u8; 32]);
 
-        // STRICT INVARIANT: Attached cert must cryptographically match the quorum's highest claim.
         if let Some(ref cert) = self.selected_prepared_certificate {
             if !cert.verify(quorum_size, public_keys) {
                 return false;
@@ -194,7 +204,7 @@ impl NewViewCertificate {
             }
         } else {
             if max_quorum_seq > 0 {
-                return false; // Safety Violation: Quorum claimed a state, but evidence is missing!
+                return false;
             }
         }
 
@@ -356,7 +366,6 @@ impl PbftState {
                             None
                         };
 
-                        // Strict WAL Replay: No Fallback
                         if max_quorum_seq == 0 || bound_cert.is_some() {
                             let nv_cert = NewViewCertificate {
                                 target_view: view,
@@ -589,7 +598,6 @@ impl PbftState {
                             })
                             .cloned();
 
-                        // Strict Invariant: No Fallback
                         if cert_opt.is_none() {
                             return Err("MISSING_QUORUM_CERTIFICATE: Quorum claims a high-seq PreparedCertificate, but it is missing locally. Rejecting NewView transition!");
                         }
@@ -665,7 +673,7 @@ mod adversarial_tests {
 
     #[test]
     fn test_conflicting_preprepare_rejected() {
-        let n = 4; // 3f + 1, where f = 1
+        let n = 4;
         let (secret_keys, public_keys) = generate_test_keys(n);
         let master_pk = G2Projective::generator();
 
@@ -693,11 +701,7 @@ mod adversarial_tests {
         };
 
         let first_result = state.handle_message(&msg_a);
-        assert!(
-            first_result.is_ok(),
-            "First valid PrePrepare must be accepted, got: {:?}",
-            first_result
-        );
+        assert!(first_result.is_ok());
 
         let mut canonical_b = Vec::new();
         canonical_b.push(Phase::PrePrepare as u8);
@@ -715,18 +719,13 @@ mod adversarial_tests {
         };
 
         let result = state.handle_message(&msg_b);
-
-        assert!(result.is_err(), "Conflicting PrePrepare must be rejected");
-
-        assert!(
-            result.unwrap_err().contains("EQUIVOCATION_DETECTED"),
-            "Expected EQUIVOCATION_DETECTED error"
-        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("EQUIVOCATION_DETECTED"));
     }
 
     #[test]
     fn test_cross_view_commit_certificate_rejected() {
-        let n = 4; // 3f + 1, where f = 1
+        let n = 4;
         let (secret_keys, public_keys) = generate_test_keys(n);
         let master_pk = G2Projective::generator();
 
@@ -755,14 +754,9 @@ mod adversarial_tests {
             signatures,
         };
 
-        assert!(
-            prepared_cert.verify(state.quorum_size, &state.public_keys),
-            "Test fixture must contain a valid Prepared Certificate"
-        );
+        assert!(prepared_cert.verify(state.quorum_size, &state.public_keys));
 
-        state
-            .prepared_certificates
-            .insert((prepared_view, seq), prepared_cert);
+        state.prepared_certificates.insert((prepared_view, seq), prepared_cert);
 
         let mut canonical_commit = Vec::new();
         canonical_commit.push(Phase::Commit as u8);
@@ -780,33 +774,21 @@ mod adversarial_tests {
         };
 
         let result = state.handle_message(&commit_msg);
-
-        assert!(
-            result.is_err(),
-            "Commit must reject a Prepared Certificate from another view"
-        );
-
-        assert!(
-            result.unwrap_err().contains("SAFETY_VIOLATION"),
-            "Expected SAFETY_VIOLATION for cross-view certificate reuse"
-        );
-
-        assert!(
-            !state.committed_digest.contains_key(&(commit_view, seq)),
-            "Cross-view certificate must never produce a committed state"
-        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("SAFETY_VIOLATION"));
+        assert!(!state.committed_digest.contains_key(&(commit_view, seq)));
     }
 
     #[test]
     fn test_ghost_certificate_attack_rejected() {
-        let n = 4; // 3f + 1, where f = 1
+        let n = 4;
         let (secret_keys, public_keys) = generate_test_keys(n);
         let master_pk = G2Projective::generator();
 
         let mut state = PbftState::new(n, public_keys.clone(), master_pk).expect("Failed to init state");
 
         let target_view: u64 = 1;
-        let malicious_seq: u64 = 999; // Ghost sequence
+        let malicious_seq: u64 = 999;
         let malicious_digest = [0xbb; 32];
 
         let create_view_change = |sender_id: u32, sk: &Scalar| {
@@ -843,24 +825,14 @@ mod adversarial_tests {
             .unwrap_or([0u8; 32]);
 
         let bound_cert = if max_quorum_seq > 0 {
-            state
-                .prepared_certificates
-                .values()
-                .find(|c| {
-                    c.seq == max_quorum_seq
-                        && c.digest == best_digest
-                        && c.verify(state.quorum_size, &state.public_keys)
-                })
-                .cloned()
+            state.prepared_certificates.values().find(|c| {
+                c.seq == max_quorum_seq && c.digest == best_digest && c.verify(state.quorum_size, &state.public_keys)
+            }).cloned()
         } else {
             None
         };
 
-        assert!(
-            bound_cert.is_none(),
-            "Node 0 magically found a ghost certificate!"
-        );
-        let is_rejected = bound_cert.is_none() && max_quorum_seq > 0;
-        assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
+        assert!(bound_cert.is_none());
+        assert!(bound_cert.is_none() && max_quorum_seq > 0);
     }
 }
