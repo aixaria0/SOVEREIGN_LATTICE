@@ -31,7 +31,7 @@ fn main() -> Result<(), &'static str> {
         dkg_session.process_incoming_share(peer_id, share_for_us, &peer_commitments)?;
     }
 
-    let (my_secret_share, canonical_master_pk) = dkg_session.finalize_dkg(&expected_participants)?;
+    let (my_secret_share, _canonical_master_pk) = dkg_session.finalize_dkg(&expected_participants)?;
     println!("🔑 [DKG SUCCESS]: Master public key successfully synthesized and verified.");
 
     // Build the true, cryptographically unique public keys for each individual node
@@ -52,7 +52,8 @@ fn main() -> Result<(), &'static str> {
         }
     }
 
-    let _pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
+    // Initialize state with exactly 2 arguments as defined in src/pbft.rs
+    let _pbft_state = PbftState::new(total_nodes, public_keys)?;
 
     println!("🛡️ [PBFT]: State machine locked! Validator registry uniquely populated.");
 
