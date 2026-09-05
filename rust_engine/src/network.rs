@@ -1,5 +1,6 @@
-use crate::pbft::{PbftMessage, PbftState, ViewChangePayload};
-use crate::threshold_bls::verify_bls_signature;
+use crate::pbft::{PbftMessage, PbftState, Phase, ViewChangePayload};
+use crate::threshold_bls::{sign_bls_message, verify_bls_signature};
+use bls12_381::Scalar;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -60,8 +61,11 @@ pub fn spawn_outbound_broadcaster(
 
 pub async fn start_tcp_listener(
     bind_addr: SocketAddr,
+    self_id: u32,
+    self_sk: Scalar,
     state: Arc<Mutex<PbftState>>,
     peer_map: HashMap<u32, SocketAddr>,
+    tx_broadcast: mpsc::Sender<PbftMessage>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(bind_addr).await?;
     let connection_semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
@@ -85,10 +89,11 @@ pub async fn start_tcp_listener(
         };
 
         let shared_state = Arc::clone(&state);
+        let tx = tx_broadcast.clone();
 
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(err) = handle_connection(socket, shared_state).await {
+            if let Err(err) = handle_connection(socket, self_id, self_sk, shared_state, tx).await {
                 eprintln!("CONNECTION_PROCESSING_ERROR: {}", err);
             }
         });
@@ -97,7 +102,10 @@ pub async fn start_tcp_listener(
 
 async fn handle_connection(
     mut socket: TcpStream,
+    self_id: u32,
+    self_sk: Scalar,
     state: Arc<Mutex<PbftState>>,
+    tx: mpsc::Sender<PbftMessage>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut len_bytes = [0u8; 4];
     socket.read_exact(&mut len_bytes).await?;
@@ -130,9 +138,59 @@ async fn handle_connection(
             return Err("CRYPTO_AUTH_FAILED: Invalid signature rejected before state lock".into());
         }
 
-        let mut locked_state = state.lock().await;
-        let response = locked_state.handle_message(&msg)?;
+        let (response, outgoing_msg) = {
+            let mut locked_state = state.lock().await;
+            let res = locked_state.handle_message(&msg)?;
+
+            let maybe_next = match msg.phase {
+                Phase::PrePrepare => {
+                    let mut can_prep = Vec::new();
+                    can_prep.push(Phase::Prepare as u8);
+                    can_prep.extend_from_slice(&msg.view.to_be_bytes());
+                    can_prep.extend_from_slice(&msg.seq.to_be_bytes());
+                    can_prep.extend_from_slice(&msg.digest);
+
+                    Some(PbftMessage {
+                        phase: Phase::Prepare,
+                        view: msg.view,
+                        seq: msg.seq,
+                        digest: msg.digest,
+                        sender_id: self_id,
+                        signature: sign_bls_message(&can_prep, &self_sk),
+                    })
+                }
+                Phase::Prepare => {
+                    if locked_state.prepared_certificates.contains_key(&(msg.view, msg.seq)) {
+                        let mut can_commit = Vec::new();
+                        can_commit.push(Phase::Commit as u8);
+                        can_commit.extend_from_slice(&msg.view.to_be_bytes());
+                        can_commit.extend_from_slice(&msg.seq.to_be_bytes());
+                        can_commit.extend_from_slice(&msg.digest);
+
+                        Some(PbftMessage {
+                            phase: Phase::Commit,
+                            view: msg.view,
+                            seq: msg.seq,
+                            digest: msg.digest,
+                            sender_id: self_id,
+                            signature: sign_bls_message(&can_commit, &self_sk),
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            (res, maybe_next)
+        };
+
         println!("{}", response);
+
+        if let Some(out_msg) = outgoing_msg {
+            let _ = tx.send(out_msg).await;
+        }
+
         return Ok(());
     }
 
