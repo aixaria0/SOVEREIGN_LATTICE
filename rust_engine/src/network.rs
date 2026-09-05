@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{mpsc, Mutex, Semaphore};
 
 const MAX_CONNECTIONS: usize = 128;
 const MAX_PACKET_SIZE: usize = 4096;
@@ -43,6 +43,19 @@ pub async fn broadcast_message(
     }
 
     results
+}
+
+pub fn spawn_outbound_broadcaster(
+    self_id: u32,
+    peer_map: HashMap<u32, SocketAddr>,
+    mut rx: mpsc::Receiver<PbftMessage>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let payload = msg.to_bytes();
+            let _ = broadcast_message(&peer_map, self_id, &payload).await;
+        }
+    })
 }
 
 pub async fn start_tcp_listener(
