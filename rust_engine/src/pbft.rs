@@ -1,4 +1,4 @@
-use crate::threshold_bls::{sign, verify_bls_signature};
+use crate::threshold_bls::verify_bls_signature;
 use crate::wal::WriteAheadLog;
 use bls12_381::{G1Projective, G2Projective};
 use std::collections::{HashMap, HashSet};
@@ -601,7 +601,7 @@ mod adversarial_tests {
             seq,
             digest: digest_a,
             sender_id: leader_id,
-            signature: sign(&canonical_a, &secret_keys[&leader_id]),
+            signature: sign_message(&canonical_a, &secret_keys[&leader_id]),
         };
 
         let first_result = state.handle_message(&msg_a);
@@ -623,7 +623,7 @@ mod adversarial_tests {
             seq,
             digest: digest_b,
             sender_id: leader_id,
-            signature: sign(&canonical_b, &secret_keys[&leader_id]),
+            signature: sign_message(&canonical_b, &secret_keys[&leader_id]),
         };
 
         let result = state.handle_message(&msg_b);
@@ -656,7 +656,7 @@ mod adversarial_tests {
 
         let mut signatures = HashMap::new();
         for node_id in 0..3u32 {
-            signatures.insert(node_id, sign(&canonical_prepare, &secret_keys[&node_id]));
+            signatures.insert(node_id, sign_message(&canonical_prepare, &secret_keys[&node_id]));
         }
 
         let prepared_cert = PreparedCertificate {
@@ -687,7 +687,7 @@ mod adversarial_tests {
             seq,
             digest,
             sender_id: 0,
-            signature: sign(&canonical_commit, &secret_keys[&0]),
+            signature: sign_message(&canonical_commit, &secret_keys[&0]),
         };
 
         let result = state.handle_message(&commit_msg);
@@ -775,3 +775,4 @@ mod adversarial_tests {
         assert!(is_rejected, "SAFETY VIOLATION: The NewView transition should have been rejected due to missing evidence!");
     }
 }
+
