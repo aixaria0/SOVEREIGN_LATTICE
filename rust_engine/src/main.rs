@@ -2,13 +2,16 @@ use std::collections::HashMap;
 use bls12_381::G2Projective;
 use sovereign_lattice::dkg::DkgSession;
 use sovereign_lattice::pbft::PbftState;
+use sovereign_lattice::network::start_tcp_listener;
 
-fn main() -> Result<(), &'static str> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_id = 0u32;
     let total_nodes = 4usize;
     let threshold = 3usize;
+    let bind_addr = "127.0.0.1:8000";
 
-    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Production Node {}...", node_id);
+    println!("🚀 [BOOTSTRAP]: Initializing Sovereign-Lattice Production Node {} on {}...", node_id, bind_addr);
 
     let mut dkg_session = DkgSession::new(node_id, threshold, total_nodes);
     let _my_commitments = dkg_session.generate_commitments();
@@ -48,9 +51,11 @@ fn main() -> Result<(), &'static str> {
         }
     }
 
-    let _pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
-
+    let pbft_state = PbftState::new(total_nodes, public_keys, canonical_master_pk)?;
     println!("🛡️ [PBFT]: State machine locked! Validator registry uniquely populated.");
+
+    println!("🌐 [NETWORK]: Starting Tokio TCP transport daemon...");
+    start_tcp_listener(bind_addr, pbft_state).await?;
 
     Ok(())
 }
