@@ -2,12 +2,13 @@ use bls12_381::{pairing, G1Projective, G2Projective, Scalar};
 use ff::Field;
 use group::Curve;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
-pub fn evaluation_point(index: usize) -> Scalar {
+pub fn evaluation_point(index: u32) -> Scalar {
     Scalar::from((index + 1) as u64)
 }
 
-pub fn lagrange_coefficient_at_zero(i: usize, indices: &[usize]) -> Scalar {
+pub fn lagrange_coefficient_at_zero(i: u32, indices: &[u32]) -> Scalar {
     let xi = evaluation_point(i);
     let mut num = Scalar::one();
     let mut den = Scalar::one();
@@ -30,23 +31,28 @@ pub fn lagrange_coefficient_at_zero(i: usize, indices: &[usize]) -> Scalar {
 }
 
 pub fn reconstruct_threshold_signature(
-    shares: &[(usize, G1Projective)],
-    indices: &[usize],
+    signatures: &HashMap<u32, G1Projective>,
 ) -> G1Projective {
+    let indices: Vec<u32> = signatures.keys().copied().collect();
     let mut reconstructed = G1Projective::identity();
-    for &(idx, share) in shares {
-        let coeff = lagrange_coefficient_at_zero(idx, indices);
-        reconstructed += share * coeff;
+    for (&idx, &sig) in signatures {
+        let coeff = lagrange_coefficient_at_zero(idx, &indices);
+        reconstructed += sig * coeff;
     }
     reconstructed
 }
 
 pub fn verify_bound_threshold_signature(
     msg: &[u8],
-    reconstructed_sig: &G1Projective,
+    signatures: &HashMap<u32, G1Projective>,
     master_pk: &G2Projective,
+    threshold: usize,
 ) -> bool {
-    verify_bls_signature(msg, reconstructed_sig, master_pk)
+    if signatures.len() < threshold {
+        return false;
+    }
+    let reconstructed_sig = reconstruct_threshold_signature(signatures);
+    verify_bls_signature(msg, &reconstructed_sig, master_pk)
 }
 
 pub fn hash_to_scalar(domain: &[u8], data: &[u8]) -> Scalar {
